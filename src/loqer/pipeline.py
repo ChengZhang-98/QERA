@@ -100,53 +100,6 @@ def pipeline_loqer():
     loqer_scaling_mode = config["loqer_scaling_mode"]
     loqer_config = config["loqer_config"]
 
-    # model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-    # # model_name = "facebook/opt-1.3b"
-    # # model_name = "Open-Orca/Mistral-7B-OpenOrca"
-    # loqer_dtype = torch.float32
-    # eval_dtype = torch.float16
-    # device_map = "auto-balance"
-    # loqer_scaling_mode = "diagonal"
-    # # scaling_mode = "rxx"
-    # calibration_set = "slim_pajama_6b"
-    # num_calibration_samples = 16
-    # perplexity_eval_batch_size = 4
-    # perplexity_max_seq_length = 2048
-
-    # loqer_config = {
-    #     # llama
-    #     r"model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj": "default-1",
-    #     r"model\.layers\.[0-9]+\.mlp\.(gate|down|up)_proj": "default-1",
-    #     r"model\.layers\.[0-9]+\.self_attn\.(matmul_0|matmul_1)": "default-matmul",
-    #     # opt
-    #     r"model\.decoder\.layers\.[0-9]+\.self_attn\.(k|q|v|out)_proj": "default-1",
-    #     r"model\.decoder\.layers\.[0-9]+\.(fc1|fc2)": "default-1",
-    #     r"model\.decoder\.layers\.[0-9]+\.self_attn\.(bmm_0|bmm_1)": "default-matmul",
-    #     "default-1": {
-    #         "rank": 64,
-    #         "name": "loqer",
-    #         "x_quantizer": {"name": "bypass"},
-    #         "w_quantizer": {
-    #             "name": "block_fp",
-    #             "width": 4,
-    #             "exponent_width": 8,
-    #             "exponent_bias": None,
-    #             "block_size": [4, 16],
-    #         },
-    #         "b_quantizer": {"name": "bypass"},
-    #     },
-    #     "default-matmul": {
-    #         "name": "flexible",
-    #         "x_quantizer": {"name": "bypass"},
-    #         "w_quantizer": {"name": "bypass"},
-    #     },
-    # }
-
-    # perplexity_evaluation_set = "wikitext2"
-
-    # num_workers = 8
-    # disable_loqer = False
-
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
