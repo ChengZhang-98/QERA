@@ -103,7 +103,10 @@ def attach_AB(model, layers_to_approximate, AB_dict: dict[str, torch.Tensor]):
 
         layer: torch.nn.Linear = get_layer_by_name(model, layer_name)
         device = layer.weight.device
-        layer.A = torch.nn.Parameter(A.to(device))
-        layer.B = torch.nn.Parameter(B.to(device))
+        dtype = layer.weight.dtype
+        A = A.to(dtype).to(device)
+        B = B.to(dtype).to(device)
+        layer.A = torch.nn.Parameter(A)
+        layer.B = torch.nn.Parameter(B)
 
     return model
