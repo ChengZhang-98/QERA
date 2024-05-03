@@ -64,7 +64,14 @@ def _compute_scales_and_error_for_fc(
 
     weight_q = w_quantizer(weight)
     scale = scale.to(weight.device)
-    scaled_q_error_T = torch.diag(scale) @ (weight - weight_q).transpose(0, 1)
+    if scale.ndim == 1:
+        assert scale.shape[0] == weight.shape[1], "Scale must have the same number of elements as the weight"
+        scaled_q_error_T = torch.diag(scale) @ (weight - weight_q).transpose(0, 1)
+    elif scale.ndim == 2:
+        assert scale.shape[0] == scale.shape[1], "Scale must be a square matrix"
+        scaled_q_error_T = scale @ (weight - weight_q).transpose(0, 1)
+    else:
+        raise ValueError("Scale must be either a vector (diagonal) or a matrix")
 
     U, S, V_T = torch.linalg.svd(scaled_q_error_T)
 
@@ -72,8 +79,14 @@ def _compute_scales_and_error_for_fc(
     S = S[:rank]
     V_T = V_T[:rank, :]
 
-    A = ab_quantizer(torch.diag(scale).inverse() @ U)
-    B = ab_quantizer(torch.diag(S) @ V_T)
+    if scale.ndim == 1:
+        A = ab_quantizer(torch.diag(scale).inverse() @ U)
+        B = ab_quantizer(torch.diag(S) @ V_T)
+    elif scale.ndim == 2:
+        A = ab_quantizer(scale.inverse() @ U)
+        B = ab_quantizer(torch.diag(S) @ V_T)
+    else:
+        raise ValueError("Scale must be either a vector (diagonal) or a matrix")
 
     A_name = layer_name + ".A"
     B_name = layer_name + ".B"
@@ -89,7 +102,8 @@ def attach_AB(model, layers_to_approximate, AB_dict: dict[str, torch.Tensor]):
         B = AB_dict[layer_name + ".B"]
 
         layer: torch.nn.Linear = get_layer_by_name(model, layer_name)
-        layer.A = torch.nn.Parameter(A)
-        layer.B = torch.nn.Parameter(B)
+        device = layer.weight.device
+        layer.A = torch.nn.Parameter(A.to(device))
+        layer.B = torch.nn.Parameter(B.to(device))
 
     return model
