@@ -162,7 +162,7 @@ def pipeline_loqer():
         profile_outputs = evaluate_perplexity(
             model=model,
             eval_dataloader=calibration_dataloader,
-            num_samples=None,
+            num_samples=num_calibration_samples,
             progress_bar=True,
             input_device=None,
             description="Calibrating",
@@ -494,7 +494,6 @@ def pipeline_q_baseline():
         if isinstance(model.config.quantization_config, GPTQConfig):
             q_method = "gptq"
             model = exllama_set_max_input_length(model, 8192)
-            # model = dispatch_model(model, device_map=create_device_map(model, device_map="auto"))
         elif isinstance(model.config.quantization_config, AwqConfig):
             q_method = "awq"
         elif isinstance(model.config.quantization_config, dict):
@@ -523,7 +522,6 @@ def pipeline_q_baseline():
             collate_fn=data_collator,
         )
 
-        model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
         perplexity_results = evaluate_perplexity(
             model=model,
             eval_dataloader=perplexity_dataloader,
