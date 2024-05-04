@@ -167,14 +167,57 @@ class ScaleHookFactoryRxx:
         self.handles = []
 
 
+class ScaleHookFactoryDummy:
+    """
+    dummy scale, which is torch.ones
+    """
+
+    def __init__(self) -> None:
+        self.scales = {}
+        self.in_features = {}
+        self.handles = []
+        self.dtype = None
+
+    def get_scale_hook(self, name: str) -> callable:
+        self.scales[name] = None
+        self.in_features[name] = None
+
+        @torch.no_grad()
+        def scale_hook(
+            module: torch.nn.Linear,
+            input: tuple[torch.Tensor],
+            output: torch.Tensor,
+        ):
+            if self.in_features[name] is None:
+                self.dtype = input[0].dtype
+                x = input[0]
+                x = x.view(-1, x.shape[-1])
+                self.in_features[name] = x.shape[-1]
+
+        return scale_hook
+
+    def get_scale_dict(self) -> dict[str, torch.Tensor]:
+        for name in self.scales:
+            self.scales[name] = torch.ones(self.in_features[name], dtype=self.dtype)
+
+        return self.scales
+
+    def remove_all_hooks(self):
+        for handle in self.handles:
+            handle.remove()
+        self.handles = []
+
+
 def register_scale_hooks(
     model: torch.nn.Module,
     mode: str = "diagonal",
 ):
-    if mode == "diagonal":
+    if mode in ["diagonal", "diag"]:
         hook_factory = ScaleHookFactoryDiagonal()
     elif mode == "rxx":
         hook_factory = ScaleHookFactoryRxx()
+    elif mode == "dummy":
+        hook_factory = ScaleHookFactoryDummy()
     else:
         raise ValueError(f"mode {mode} is not supported")
 

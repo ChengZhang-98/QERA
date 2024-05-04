@@ -76,9 +76,9 @@ def pipeline_loqer():
         "--loqer-scaling-mode",
         dest="loqer_scaling_mode",
         type=str,
-        help="Loqer scaling mode",
+        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'dummy'].",
         default=None,
-        choices=["diagonal", "rxx"],
+        choices=["diagonal", "diag", "rxx", "dummy"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
@@ -138,6 +138,8 @@ def pipeline_loqer():
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if not disable_loqer and AB_dict is None:
+        if loqer_scaling_mode == "dummy":
+            logger.info("🔊 Using dummy scale (torch.ones)")
         logger.info("🚀 Running data calibration...")
         profiler_factory = register_scale_hooks(model, mode=loqer_scaling_mode)
 
