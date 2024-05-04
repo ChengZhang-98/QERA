@@ -240,12 +240,13 @@ def pipeline_loqer():
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # save approximation results
-        mse_df.to_csv(output_dir / "approximation_error.csv", index=False)
-        # save AB_dict
-        AB_dict_path = output_dir / "AB_dict.pt"
-        torch.save(AB_dict, AB_dict_path)
-        config["AB_dict"] = AB_dict_path.resolve().as_posix()
+        if not disable_loqer:
+            # save approximation results
+            mse_df.to_csv(output_dir / "approximation_error.csv", index=False)
+            # save AB_dict
+            AB_dict_path = output_dir / "AB_dict.pt"
+            torch.save(AB_dict, AB_dict_path)
+            config["AB_dict"] = AB_dict_path.resolve().as_posix()
 
         # save perplexity results
         if not disable_perplexity_eval:
