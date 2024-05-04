@@ -44,6 +44,7 @@ loqer_config:
   default-1:
     rank: 32
     name: loqer
+    is_ptq: true
     x_quantizer:
       name: bypass
     w_quantizer:
