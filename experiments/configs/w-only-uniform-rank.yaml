@@ -52,7 +52,7 @@ loqer_config:
       width: 4
       exponent_width: 8
       exponent_bias: null
-      block_size: [4, 16]
+      block_size: [1, 32]
       skip_first_dim: false
     b_quantizer:
       name: bypass

@@ -148,7 +148,7 @@ def pipeline_loqer():
             tokenizer=tokenizer,
             padding="max_length",
             max_length=perplexity_max_seq_length,
-            num_raw_samples=num_calibration_samples * 10,
+            num_raw_samples=20 * num_calibration_samples,
         )
 
         calibration_dataloader = DataLoader(
