@@ -334,10 +334,12 @@ def quantize_opt_model(
         q_config_layer = loqer_config[layer_entry]
 
         new_decoder_layer = OPTQuantizedDecoderLayer(model.config, q_config_layer)
-        new_decoder_layer.to(next(iter(model.parameters())).dtype)
-        new_decoder_layer.to(next(iter(model.parameters())).device)
+        new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).dtype)
+        new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).device)
         new_decoder_layer.load_state_dict(ori_decoder_layer.state_dict(), strict=False)
         model.model.decoder.layers[layer_id] = new_decoder_layer
+        # remove the original layer
+        del ori_decoder_layer
 
     model._no_split_modules = ["OPTDecoderLayer", "OPTQuantizedDecoderLayer"]
 
