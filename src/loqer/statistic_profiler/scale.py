@@ -4,7 +4,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-CLAMP_MIN = 1e-6
+# CLAMP_MIN = 1e-6
 NUM_MATRIX_SQRT_ITERATIONS = 200
 
 
@@ -53,7 +53,7 @@ class ScaleHookFactoryDiagonal:
         for name in self.scales:
             scale = self.scales[name].to(self.compute_device)
             scale = torch.sqrt(scale / self.n_samples[name])
-            scale = torch.clamp(scale, min=CLAMP_MIN)
+            # scale = torch.clamp(scale, min=CLAMP_MIN)
             self.scales[name] = scale
 
         return self.scales
@@ -124,6 +124,7 @@ class ScaleHookFactoryRxx:
         self.compute_device = None
         self.handles = []
 
+    @torch.no_grad()
     def get_scale_hook(self, name: str) -> callable:
         """ """
 
@@ -152,6 +153,7 @@ class ScaleHookFactoryRxx:
 
         return scale_hook
 
+    @torch.no_grad()
     def get_scale_dict(self) -> dict[str, torch.Tensor]:
         for name in self.scales:
             scale = self.scales[name].to(self.compute_device)
@@ -196,6 +198,7 @@ class ScaleHookFactoryDummy:
 
         return scale_hook
 
+    @torch.no_grad()
     def get_scale_dict(self) -> dict[str, torch.Tensor]:
         for name in self.scales:
             self.scales[name] = torch.ones(self.in_features[name], dtype=self.dtype)
