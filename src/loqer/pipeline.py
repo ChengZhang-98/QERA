@@ -134,6 +134,7 @@ def pipeline_loqer():
     if hasattr(model, "tie_weights"):
         model.tie_weights()
     device_map = create_device_map(model, device_map=device_map)
+    logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
@@ -162,7 +163,7 @@ def pipeline_loqer():
         profile_outputs = evaluate_perplexity(
             model=model,
             eval_dataloader=calibration_dataloader,
-            num_samples=num_calibration_samples,
+            num_samples=num_calibration_samples if loqer_scaling_mode != "dummy" else perplexity_eval_batch_size,
             progress_bar=True,
             input_device=None,
             description="Calibrating",
