@@ -322,10 +322,12 @@ def quantize_mistral_model(
 
         # replace the decoder layer with quantized decoder layer
         new_decoder_layer = MistralQuantizedDecoderLayer(model.config, layer_id, layer_q_config)
-        new_decoder_layer.to(next(iter(model.parameters())).dtype)
-        new_decoder_layer.to(next(iter(model.parameters())).device)
+        new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).dtype)
+        new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).device)
         new_decoder_layer.load_state_dict(ori_decoder_layer.state_dict(), strict=False)
         model.model.layers[layer_id] = new_decoder_layer
+        # remove the original layer
+        del ori_decoder_layer
 
     model._no_split_modules = ["MistralDecoderLayer", "MistralQuantizedDecoderLayer"]
 

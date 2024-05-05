@@ -1,4 +1,5 @@
 from copy import deepcopy
+import logging
 from functools import partial
 
 import torch
@@ -7,6 +8,10 @@ import pandas as pd
 
 from .utils import find_matched_pattern, get_layer_by_name, get_layer_name, set_layer_by_name, setattr_recursive
 from .quantize import get_quantizer
+
+logger = logging.getLogger(__name__)
+
+EPSILON = 1e-6
 
 
 @torch.no_grad()
@@ -29,6 +34,23 @@ def compute_AB_and_approximation_error(
         df.loc[len(df)] = [layer_name, mse.item(), layer_loqer_config["rank"]]
 
     return AB_dict, df
+
+
+def _find_nearest_scale_inverse(scale: torch.Tensor) -> torch.Tensor:
+    if scale.ndim == 1:
+        scale = torch.where(scale <= 0, torch.ones_like(scale) * EPSILON, scale)
+        return torch.diag(scale).inverse()
+    elif scale.ndim == 2:
+        try:
+            return scale.inverse()
+        except RuntimeError as e:
+            logging.warning(f"Matrix inversion failed: {e}. Adding turbulence to the scale matrix")
+            U, S, V_T = torch.linalg.svd(scale)
+            S = torch.where(S <= 0, torch.ones_like(S) * EPSILON, S)
+            scale = U @ torch.diag(S) @ V_T
+            return scale.inverse()
+    else:
+        raise ValueError("Scale must be either a vector (diagonal) or a matrix")
 
 
 def _compute_scales_and_error_for_fc(
@@ -80,10 +102,10 @@ def _compute_scales_and_error_for_fc(
     V_T = V_T[:rank, :]
 
     if scale.ndim == 1:
-        A = ab_quantizer(torch.diag(scale).inverse() @ U)
+        A = ab_quantizer(_find_nearest_scale_inverse(scale) @ U)
         B = ab_quantizer(torch.diag(S) @ V_T)
     elif scale.ndim == 2:
-        A = ab_quantizer(scale.inverse() @ U)
+        A = ab_quantizer(_find_nearest_scale_inverse(scale) @ U)
         B = ab_quantizer(torch.diag(S) @ V_T)
     else:
         raise ValueError("Scale must be either a vector (diagonal) or a matrix")

@@ -89,7 +89,7 @@ class BlockFPQuantize(torch.autograd.Function):
         exponent_width: int = 8,
         exponent_bias: int = None,
         block_size: list[int] = [16],
-        skip_first_dim: bool = True,
+        skip_first_dim: bool = False,
     ):
         return _block_fp_quantize(
             x,
@@ -112,7 +112,7 @@ def block_fp_quantizer(
     exponent_width: int = 8,
     exponent_bias: int = None,
     block_size: list[int] = [16],
-    skip_first_dim: bool = True,
+    skip_first_dim: bool = False,
 ):
     """
     - Convert IEEE FP32/64 to Microsoft floating point (MSFP), where an exponent is shared over all elements in a block.

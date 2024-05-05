@@ -60,7 +60,7 @@ def get_data_module(
     if num_raw_samples is not None:
         raw_data_module = hf_datasets.DatasetDict(
             **{
-                split: raw_data_module[split].select(range(num_raw_samples))
+                split: raw_data_module[split].select(range(min(num_raw_samples, len(raw_data_module[split]))))
                 for split in raw_data_module.keys()
             }
         )
