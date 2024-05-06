@@ -64,7 +64,7 @@ class ScaleHookFactoryDiagonal:
         for name in scale_names_prog_bar:
             # for name in self.scales:
             scale = self.scales[name].to(self.compute_devices[name])
-            scale = torch.sqrt(scale / self.n_samples[name])
+            scale = torch.sqrt(scale) * (1 / math.sqrt(self.n_samples[name]))
             # scale = torch.clamp(scale, min=CLAMP_MIN)
             self.scales[name] = scale
 
@@ -187,7 +187,10 @@ def sqrtm_scipy(A: np.ndarray):
 class ScaleHookFactoryRxx:
     """
     For row vector x,
-    scale = E[ x^T x ] ^ 0.5, Rxx = E[ x^T x ] is the auto-correlation matrix
+    scale = E[ x^T x ] ^ 0.5, where Rxx = E[ x^T x ] is the auto-correlation matrix
+
+    For numerical stability, we compute (x^T x) in torch_dtype (float32 is preferred) and accumulate in float64 (hard-coded).
+    Then sqrt is computed in float64 (hard-coded).
     """
 
     def __init__(self, torch_dtype) -> None:
@@ -219,12 +222,15 @@ class ScaleHookFactoryRxx:
                 self.compute_devices[name] = x.device
                 if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
-                self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
+                self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
 
             compute_device = self.compute_devices[name]
             scales = self.scales[name].to(compute_device)
             x = x.to(self.torch_dtype)
-            scales += torch.einsum("bi,bj->ij", x, x)  # batched outer product
+            # batched outer product
+            # *: outer product in self.torch_dtype (float32 is preferred), then accumulate in float64
+            delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
+            scales += delta
             self.scales[name] = scales.cpu()
             self.n_samples[name] += n_samples
 

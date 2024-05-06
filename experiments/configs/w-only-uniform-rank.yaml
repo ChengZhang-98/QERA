@@ -1,7 +1,7 @@
 model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 # Note that the dtype for statistic profiling is hard-coded float32,
 # since the SVD of float16 is not supported by pytorch
-loqer_dtype: float64 # the precision for computing scale, A, and B
+loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
 eval_dtype: float16 # the precision for evaluation
 device_map: auto-balance
 num_workers: 8

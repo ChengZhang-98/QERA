@@ -155,7 +155,7 @@ def pipeline_loqer():
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=torch.float32, _attn_implementation="eager"
+        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
@@ -169,7 +169,7 @@ def pipeline_loqer():
         if loqer_scaling_mode == "dummy":
             logger.info("🔊 Using dummy scale (torch.ones)")
         logger.info("🚀 Running data calibration...")
-        profiler_factory = register_scale_hooks(model, mode=loqer_scaling_mode, torch_dtype=loqer_dtype)  # !:
+        profiler_factory = register_scale_hooks(model, mode=loqer_scaling_mode, torch_dtype=loqer_dtype)
 
         calibration_datamodule = get_data_module(
             name=calibration_set,
