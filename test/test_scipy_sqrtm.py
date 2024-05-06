@@ -72,7 +72,7 @@ if __name__ == "__main__":
                 if len(results) < 5:
                     results.append(A_sqrtm)
 
-        print(f"NumPy: {np.mean(np.array(end_times) - np.array(start_times)):.2f} ms")
+        print(f"NumPy: {np.mean(np.array(end_times) - np.array(start_times)):.2f} s")
         # output
         for i, A_sqrtm in enumerate(results):
             with np.printoptions(precision=4, edgeitems=10, linewidth=50):
