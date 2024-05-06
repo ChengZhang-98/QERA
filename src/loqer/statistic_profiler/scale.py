@@ -20,7 +20,7 @@ class ScaleHookFactoryDiagonal:
     def __init__(self, torch_dtype) -> None:
         self.scales = {}
         self.n_samples = {}
-        self.compute_device = None
+        self.compute_devices = {}
         self.torch_dtype = torch_dtype
         self.handles = []
 
@@ -41,14 +41,14 @@ class ScaleHookFactoryDiagonal:
 
             self.n_samples[name] += num_samples
             if self.scales[name] is None:
-                self.compute_device = x.device
+                self.compute_devices[name] = x.device
                 if self.torch_dtype is None:
                     self.torch_dtype = x.dtype
-                if self.compute_device.type == "cpu":
+                if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing scale, this may be slow")
                 scale = x.to(self.torch_dtype)
             else:
-                scale = self.scales[name].to(self.compute_device)
+                scale = self.scales[name].to(self.compute_devices[name])
                 scale = scale + x.to(self.torch_dtype)
 
             self.scales[name] = scale
@@ -63,7 +63,7 @@ class ScaleHookFactoryDiagonal:
 
         for name in scale_names_prog_bar:
             # for name in self.scales:
-            scale = self.scales[name].to(self.compute_device)
+            scale = self.scales[name].to(self.compute_devices[name])
             scale = torch.sqrt(scale / self.n_samples[name])
             # scale = torch.clamp(scale, min=CLAMP_MIN)
             self.scales[name] = scale
@@ -193,7 +193,7 @@ class ScaleHookFactoryRxx:
     def __init__(self, torch_dtype) -> None:
         self.scales = {}
         self.n_samples = {}
-        self.compute_device = None
+        self.compute_devices = {}
         self.torch_dtype = torch_dtype
         self.handles = []
 
@@ -214,14 +214,15 @@ class ScaleHookFactoryRxx:
             x = x.reshape(-1, x.shape[-1])
             n_samples, in_features = x.shape
             if self.scales[name] is None:
-                self.compute_device = x.device
                 if self.torch_dtype is None:
                     self.torch_dtype = x.dtype
-                if self.compute_device.type == "cpu":
+                self.compute_devices[name] = x.device
+                if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
                 self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
 
-            scales = self.scales[name].to(self.compute_device)
+            compute_device = self.compute_devices[name]
+            scales = self.scales[name].to(compute_device)
             x = x.to(self.torch_dtype)
             scales += torch.einsum("bi,bj->ij", x, x)  # batched outer product
             self.scales[name] = scales.cpu()
@@ -240,7 +241,8 @@ class ScaleHookFactoryRxx:
                 self.scales, desc="Computing scale", disable=not progress_bar, total=len(self.scales)
             )
             for name in scale_names_prog_bar:
-                scale = self.scales[name].to(self.compute_device)
+                compute_device = self.compute_devices[name]
+                scale = self.scales[name].to(compute_device)
                 scale = scale.unsqueeze(0)
                 scale = sqrtm_newton_schulz(scale, numIters=sqrtm_num_iters)
                 scale = scale.squeeze(0)
@@ -265,7 +267,7 @@ class ScaleHookFactoryRxx:
             for name in self.scales:
                 scale = self.scales[name]
                 n_samples = self.n_samples[name]
-                scale = torch.from_numpy(scale).to(self.torch_dtype).to(self.compute_device)
+                scale = torch.from_numpy(scale).to(self.torch_dtype).to(self.compute_devices[name])
                 scale = scale * (1 / math.sqrt(n_samples))
                 self.scales[name] = scale
         else:
