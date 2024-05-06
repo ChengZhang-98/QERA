@@ -14,11 +14,11 @@ from transformers import set_seed
 from tqdm import tqdm
 from threadpoolctl import threadpool_limits
 
-from loqer.statistic_profiler.scale import sqrt_newton_schulz
+from loqer.statistic_profiler.scale import sqrtm_newton_schulz
 
 
 def compute_sqrtm_cuda(A, numIters=200):
-    A_sqrt = sqrt_newton_schulz(A, numIters)
+    A_sqrt = sqrtm_newton_schulz(A, numIters)
     return A_sqrt
 
 
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     matrix_size = (13824, 13824)  # CUDA: 76277.03 ms = 1.1min, NumPy kraken: 6min
 
     A_list = [np.random.randn(*matrix_size).astype(np.float32) for _ in range(5)]
-    profile_cuda = True
+    profile_cuda = False
     profile_cpu = True
 
     if profile_cuda:

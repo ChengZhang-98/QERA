@@ -7,7 +7,7 @@ assert src_path.exists(), f"Path does not exist: {src_path}"
 sys.path.append(src_path.as_posix())
 import torch
 
-from loqer.statistic_profiler.scale import ScaleHookFactoryRxx, sqrt_newton_schulz
+from loqer.statistic_profiler.scale import ScaleHookFactoryRxx, sqrtm_newton_schulz
 
 if __name__ == "__main__":
     hook_factory = ScaleHookFactoryRxx()
@@ -37,4 +37,4 @@ if __name__ == "__main__":
 
     Exx_manual_unsqueezed = Exx_manual.unsqueeze(0)
 
-    print(sqrt_newton_schulz(Exx_manual_unsqueezed, numIters=200))
+    print(sqrtm_newton_schulz(Exx_manual_unsqueezed, numIters=200))

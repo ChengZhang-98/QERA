@@ -11,8 +11,6 @@ from .quantize import get_quantizer
 
 logger = logging.getLogger(__name__)
 
-EPSILON = 1e-6
-
 
 @torch.no_grad()
 def compute_AB_and_approximation_error(
@@ -36,19 +34,25 @@ def compute_AB_and_approximation_error(
     return AB_dict, df
 
 
-def _find_nearest_scale_inverse(scale: torch.Tensor) -> torch.Tensor:
+def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tensor:
+    """
+    If not the scale matrix is not invertible, add turbulence to the scale matrix
+
+    Perform S^-1 @ U using `torch.linalg.solve`, which is more numerically stable.
+    Refer to https://pytorch.org/docs/stable/generated/torch.linalg.inv.html
+    """
     if scale.ndim == 1:
-        scale = torch.where(scale <= 0, torch.ones_like(scale) * EPSILON, scale)
-        return torch.diag(scale).inverse()
+        scale = torch.where(scale <= 0, torch.ones_like(scale) * torch.finfo(scale.dtype).eps, scale)
+        return torch.linalg.solve(torch.diag(scale), U)
     elif scale.ndim == 2:
         try:
-            return scale.inverse()
+            return torch.linalg.solve(scale, U)
         except RuntimeError as e:
-            logging.warning(f"Matrix inversion failed: {e}. Adding turbulence to the scale matrix")
-            U, S, V_T = torch.linalg.svd(scale)
-            S = torch.where(S <= 0, torch.ones_like(S) * EPSILON, S)
-            scale = U @ torch.diag(S) @ V_T
-            return scale.inverse()
+            logger.warning(f"Matrix inversion failed: {e} Adding turbulence to the scale matrix")
+            U_scale, S_scale, V_T_scale = torch.linalg.svd(scale)
+            S_scale = torch.where(S_scale <= 0, torch.ones_like(S_scale) * torch.finfo(S_scale.dtype).eps, S_scale)
+            scale = U_scale @ torch.diag(S_scale) @ V_T_scale
+            return torch.linalg.solve(scale, U)
     else:
         raise ValueError("Scale must be either a vector (diagonal) or a matrix")
 
@@ -85,7 +89,7 @@ def _compute_scales_and_error_for_fc(
     weight = layer.weight
 
     weight_q = w_quantizer(weight)
-    scale = scale.to(weight.device)
+    scale = scale.to(weight.dtype).to(weight.device)
     if scale.ndim == 1:
         assert scale.shape[0] == weight.shape[1], "Scale must have the same number of elements as the weight"
         scaled_q_error_T = torch.diag(scale) @ (weight - weight_q).transpose(0, 1)
@@ -102,10 +106,10 @@ def _compute_scales_and_error_for_fc(
     V_T = V_T[:rank, :]
 
     if scale.ndim == 1:
-        A = ab_quantizer(_find_nearest_scale_inverse(scale) @ U)
+        A = _compute_scale_inv_dot_U(scale, U)
         B = ab_quantizer(torch.diag(S) @ V_T)
     elif scale.ndim == 2:
-        A = ab_quantizer(_find_nearest_scale_inverse(scale) @ U)
+        A = _compute_scale_inv_dot_U(scale, U)
         B = ab_quantizer(torch.diag(S) @ V_T)
     else:
         raise ValueError("Scale must be either a vector (diagonal) or a matrix")
