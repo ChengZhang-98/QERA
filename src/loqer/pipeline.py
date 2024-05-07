@@ -11,10 +11,10 @@ from accelerate import dispatch_model
 from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
 from auto_gptq import exllama_set_max_input_length
 
-from .statistic_profiler import register_scale_hooks
+from .statistic_profiler import register_scale_hooks, share_scales
 from .datasets import get_data_module
 from .evaluate import evaluate_perplexity, evaluate_harness_downstream
-from .models import find_layers_to_approximate, quantize_model
+from .models import find_layers_to_approximate, quantize_model, find_layers_to_register_scale_hook
 from .approximate import compute_AB_and_approximation_error, attach_AB
 from .utils import create_device_map
 
@@ -169,7 +169,13 @@ def pipeline_loqer():
         if loqer_scaling_mode == "dummy":
             logger.info("🔊 Using dummy scale (torch.ones)")
         logger.info("🚀 Running data calibration...")
-        profiler_factory = register_scale_hooks(model, mode=loqer_scaling_mode, torch_dtype=loqer_dtype)
+        layers_to_register_and_share = find_layers_to_register_scale_hook(model)
+        profiler_factory = register_scale_hooks(
+            model,
+            layers_to_register_and_share=layers_to_register_and_share,
+            mode=loqer_scaling_mode,
+            torch_dtype=loqer_dtype,
+        )
 
         calibration_datamodule = get_data_module(
             name=calibration_set,
@@ -205,6 +211,8 @@ def pipeline_loqer():
             )
         else:
             scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+
+        share_scales(scale_dict, layers_to_register_and_share)
         logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
     logger.info("🚀 Quantizing model...")

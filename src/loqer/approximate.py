@@ -21,7 +21,7 @@ def compute_AB_and_approximation_error(
 
     for layer_name in tqdm(layers_to_approximate, desc="Computing low-rank A and B"):
         # scale
-        scale = scale_dict[layer_name]
+        scale = scale_dict[layer_name].clone()
         # loqer config
         matched_entry = find_matched_pattern(layer_name, loqer_config.keys())
         if isinstance(matched_entry, str):

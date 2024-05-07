@@ -5,6 +5,7 @@ import numpy as np
 from scipy import linalg as spla
 from numpy import linalg as la
 import tqdm
+from ..utils import get_layer_by_name, get_layer_name
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +332,7 @@ class ScaleHookFactoryDummy:
 
 def register_scale_hooks(
     model: torch.nn.Module,
+    layers_to_register_and_share: list[str],
     mode: str = "diagonal",
     torch_dtype: torch.dtype = None,
 ):
@@ -343,13 +345,28 @@ def register_scale_hooks(
     else:
         raise ValueError(f"mode {mode} is not supported")
 
-    for name, module in model.named_modules():
-        if not isinstance(module, torch.nn.Linear):
-            continue
-        if "lm_head" in name:
-            continue
-
-        handle = module.register_forward_hook(hook_factory.get_scale_hook(name))
+    for target_and_share in layers_to_register_and_share:
+        target_layer_name = target_and_share["target_layer"]
+        target_layer = get_layer_by_name(model, target_layer_name)
+        handle = target_layer.register_forward_hook(hook_factory.get_scale_hook(target_layer_name))
         hook_factory.handles.append(handle)
 
     return hook_factory
+
+
+def share_scales(
+    scale_dict: dict[str, torch.Tensor],
+    layers_to_register_and_share: list[str],
+):
+    """
+    Share scales among layers (share the same scale tensor rather than duplicate scales)
+
+    Some layers in the model may share the same input, and thus the same scale.
+
+    For example, the k_proj, q_proj, and v_proj in the self-attention layer in the transformer model share the same scale.
+    """
+    for target_and_share in layers_to_register_and_share:
+        target_layer_name = target_and_share["target_layer"]
+        layers_sharing_scale = target_and_share["layers_sharing_scale"]
+        for layer_sharing_scale in layers_sharing_scale:
+            scale_dict[layer_sharing_scale] = scale_dict[target_layer_name]
