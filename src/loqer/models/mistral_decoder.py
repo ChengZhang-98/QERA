@@ -333,6 +333,47 @@ def quantize_mistral_model(
 
     return model
 
+def find_layers_to_register_scale_hook_mistral(model: MistralForCausalLM) -> list[dict[str, str | list[str]]]:
+    """
+    return a list of dict, each dict contains the following keys:
+
+    ```
+    {
+        "target_layer": ...,
+        "layers_sharing_scale": [...],
+    }
+    ```
+    """
+
+    assert model.config._attn_implementation == "eager"
+    layers_to_register = []
+
+    for decoder_layer in model.model.layers:
+        k_name = get_layer_name(model, decoder_layer.self_attn.k_proj)
+        q_name = get_layer_name(model, decoder_layer.self_attn.q_proj)
+        v_name = get_layer_name(model, decoder_layer.self_attn.v_proj)
+        layers_to_register.append(
+            dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]),
+        )
+
+        o_name = get_layer_name(model, decoder_layer.self_attn.o_proj)
+        layers_to_register.append(
+            dict(target_layer=o_name, layers_sharing_scale=[]),
+        )
+
+        gate_name = get_layer_name(model, decoder_layer.mlp.gate_proj)
+        up_name = get_layer_name(model, decoder_layer.mlp.up_proj)
+        layers_to_register.append(
+            dict(target_layer=gate_name, layers_sharing_scale=[up_name]),
+        )
+
+        down_name = get_layer_name(model, decoder_layer.mlp.down_proj)
+        layers_to_register.append(
+            dict(target_layer=down_name, layers_sharing_scale=[]),
+        )
+
+    return layers_to_register
+
 
 def find_layers_to_approximate_mistral(model: MistralForCausalLM):
     layers_to_approximate = []

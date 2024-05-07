@@ -18,8 +18,12 @@ from .llama_decoder import (
     find_layers_to_approximate_llama,
     find_layers_to_register_scale_hook_llama,
 )
-from .opt_decoder import quantize_opt_model, find_layers_to_approximate_opt
-from .mistral_decoder import quantize_mistral_model, find_layers_to_approximate_mistral
+from .opt_decoder import quantize_opt_model, find_layers_to_approximate_opt, find_layers_to_register_scale_hook_opt
+from .mistral_decoder import (
+    quantize_mistral_model,
+    find_layers_to_approximate_mistral,
+    find_layers_to_register_scale_hook_mistral,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +59,10 @@ def find_layers_to_approximate(model):
 def find_layers_to_register_scale_hook(model):
     if isinstance(model, (LlamaForCausalLM, LlamaForSequenceClassification)):
         return find_layers_to_register_scale_hook_llama(model)
+    elif isinstance(model, (OPTForCausalLM, OPTForSequenceClassification)):
+        return find_layers_to_register_scale_hook_opt(model)
+    elif isinstance(model, (MistralForCausalLM, MistralForSequenceClassification)):
+        return find_layers_to_register_scale_hook_mistral(model)
     else:
         msg = f"Model {type(model).__name__} not supported for scale hook registration"
         raise NotImplementedError(msg)
