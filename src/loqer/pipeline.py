@@ -11,10 +11,10 @@ from accelerate import dispatch_model
 from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
 from auto_gptq import exllama_set_max_input_length
 
-from .statistic_profiler import register_scale_hooks
+from .statistic_profiler import register_scale_hooks, share_scales
 from .datasets import get_data_module
 from .evaluate import evaluate_perplexity, evaluate_harness_downstream
-from .models import find_layers_to_approximate, quantize_model
+from .models import find_layers_to_approximate, quantize_model, find_layers_to_register_scale_hook
 from .approximate import compute_AB_and_approximation_error, attach_AB
 from .utils import create_device_map
 
@@ -80,6 +80,21 @@ def pipeline_loqer():
         default=None,
         choices=["diagonal", "diag", "rxx", "dummy"],  # "diag" is alias of "diagonal"
     )
+    parser.add_argument(
+        "--loqer-sqrtm-implementation",
+        dest="loqer_sqrtm_implementation",
+        type=str,
+        help="Loqer sqrtm implementation, one of ['blocked', 'iterative'].",
+        default=None,
+        choices=["blocked", "iterative"],
+    )
+    parser.add_argument(
+        "--loqer-sqrtm-num-iters",
+        dest="loqer_sqrtm_num_iters",
+        type=int,
+        help="Number of iterations for iterative sqrtm",
+        default=None,
+    )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
 
@@ -117,6 +132,8 @@ def pipeline_loqer():
 
     disable_loqer = config["disable_loqer"]
     loqer_scaling_mode = config["loqer_scaling_mode"]
+    loqer_sqrtm_implementation = config["loqer_sqrtm_implementation"]
+    loqer_sqrtm_num_iters = config["loqer_sqrtm_num_iters"]
     loqer_config = config["loqer_config"]
     disable_perplexity_eval = config["disable_perplexity_eval"]
     disable_lm_eval = config["disable_lm_eval"]
@@ -124,6 +141,16 @@ def pipeline_loqer():
     # check output directory
     if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
         raise ValueError(f"Output directory {output_dir} is not empty")
+
+    # sqrtm_implementation
+    if loqer_sqrtm_implementation == "blocked":
+        # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
+        logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
+    elif loqer_sqrtm_implementation == "iterative":
+        # refer to https://link.springer.com/article/10.1023/A:1019150005407
+        logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
+    else:
+        raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -142,7 +169,13 @@ def pipeline_loqer():
         if loqer_scaling_mode == "dummy":
             logger.info("🔊 Using dummy scale (torch.ones)")
         logger.info("🚀 Running data calibration...")
-        profiler_factory = register_scale_hooks(model, mode=loqer_scaling_mode)
+        layers_to_register_and_share = find_layers_to_register_scale_hook(model)
+        profiler_factory = register_scale_hooks(
+            model,
+            layers_to_register_and_share=layers_to_register_and_share,
+            mode=loqer_scaling_mode,
+            torch_dtype=loqer_dtype,
+        )
 
         calibration_datamodule = get_data_module(
             name=calibration_set,
@@ -170,7 +203,16 @@ def pipeline_loqer():
         )
 
         profiler_factory.remove_all_hooks()
-        scale_dict = profiler_factory.get_scale_dict()
+        if loqer_scaling_mode == "rxx":
+            scale_dict = profiler_factory.get_scale_dict(
+                progress_bar=True,
+                sqrtm_implementation=loqer_sqrtm_implementation,
+                sqrtm_num_iters=loqer_sqrtm_num_iters,
+            )
+        else:
+            scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+
+        share_scales(scale_dict, layers_to_register_and_share)
         logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
     logger.info("🚀 Quantizing model...")

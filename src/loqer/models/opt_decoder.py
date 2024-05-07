@@ -346,6 +346,30 @@ def quantize_opt_model(
     return model
 
 
+def find_layers_to_register_scale_hook_opt(model: OPTForCausalLM):
+    assert model.config._attn_implementation == "eager"
+
+    layers_to_register = []
+
+    for decoder_layer in model.model.decoder.layers:
+        decoder_layer: OPTDecoderLayer
+        k_name = get_layer_name(model, decoder_layer.self_attn.k_proj)
+        q_name = get_layer_name(model, decoder_layer.self_attn.q_proj)
+        v_name = get_layer_name(model, decoder_layer.self_attn.v_proj)
+        layers_to_register.append(dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]))
+
+        out_name = get_layer_name(model, decoder_layer.self_attn.out_proj)
+        layers_to_register.append(dict(target_layer=out_name, layers_sharing_scale=[]))
+
+        fc1_name = get_layer_name(model, decoder_layer.fc1)
+        layers_to_register.append(dict(target_layer=fc1_name, layers_sharing_scale=[]))
+
+        fc2_name = get_layer_name(model, decoder_layer.fc2)
+        layers_to_register.append(dict(target_layer=fc2_name, layers_sharing_scale=[]))
+
+    return layers_to_register
+
+
 def find_layers_to_approximate_opt(model: OPTForCausalLM):
     layers_to_approximate = []
     for layer_name, layer in model.named_modules():

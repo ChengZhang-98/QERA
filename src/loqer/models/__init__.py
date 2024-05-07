@@ -13,9 +13,17 @@ from transformers.models.mistral.modeling_mistral import (
     MistralForCausalLM,
     MistralForSequenceClassification,
 )
-from .llama_decoder import quantize_llama_model, find_layers_to_approximate_llama
-from .opt_decoder import quantize_opt_model, find_layers_to_approximate_opt
-from .mistral_decoder import quantize_mistral_model, find_layers_to_approximate_mistral
+from .llama_decoder import (
+    quantize_llama_model,
+    find_layers_to_approximate_llama,
+    find_layers_to_register_scale_hook_llama,
+)
+from .opt_decoder import quantize_opt_model, find_layers_to_approximate_opt, find_layers_to_register_scale_hook_opt
+from .mistral_decoder import (
+    quantize_mistral_model,
+    find_layers_to_approximate_mistral,
+    find_layers_to_register_scale_hook_mistral,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,4 +53,16 @@ def find_layers_to_approximate(model):
         return find_layers_to_approximate_mistral(model)
     else:
         msg = f"Model {type(model).__name__} not supported for layer approximation"
+        raise NotImplementedError(msg)
+
+
+def find_layers_to_register_scale_hook(model):
+    if isinstance(model, (LlamaForCausalLM, LlamaForSequenceClassification)):
+        return find_layers_to_register_scale_hook_llama(model)
+    elif isinstance(model, (OPTForCausalLM, OPTForSequenceClassification)):
+        return find_layers_to_register_scale_hook_opt(model)
+    elif isinstance(model, (MistralForCausalLM, MistralForSequenceClassification)):
+        return find_layers_to_register_scale_hook_mistral(model)
+    else:
+        msg = f"Model {type(model).__name__} not supported for scale hook registration"
         raise NotImplementedError(msg)
