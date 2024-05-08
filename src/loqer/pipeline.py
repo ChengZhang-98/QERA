@@ -195,6 +195,7 @@ def pipeline_loqer():
             padding="max_length",
             max_length=perplexity_max_seq_length,
             num_raw_samples=20 * num_calibration_samples,
+            num_workers=num_workers,
         )
 
         calibration_dataloader = DataLoader(
@@ -255,6 +256,7 @@ def pipeline_loqer():
             padding="max_length",
             max_length=perplexity_max_seq_length,
             num_raw_samples=None,
+            num_workers=num_workers,
         )
         eval_dataloader = DataLoader(
             eval_datamodule["test"],
@@ -409,6 +411,7 @@ def pipeline_fp16():
             padding="max_length",
             max_length=perplexity_max_seq_length,
             num_raw_samples=None,
+            num_workers=num_workers,
         )
         perplexity_dataloader = DataLoader(
             perplexity_datamodule["test"],
