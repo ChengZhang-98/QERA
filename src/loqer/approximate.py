@@ -29,7 +29,7 @@ def compute_AB_and_approximation_error(
         layer_loqer_config = deepcopy(loqer_config[matched_entry])
         layer_AB_dict, mse = _compute_scales_and_error_for_fc(model, layer_name, scale, layer_loqer_config)
         AB_dict.update(layer_AB_dict)
-        df.loc[len(df)] = [layer_name, mse.item(), layer_loqer_config["rank"]]
+        df.loc[len(df)] = [layer_name, mse, layer_loqer_config["rank"]]
 
     return AB_dict, df
 
@@ -59,7 +59,7 @@ def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tens
 
 def _compute_scales_and_error_for_fc(
     model: torch.nn.Module, layer_name: str, scale: torch.Tensor, layer_loqer_config: dict
-) -> dict[str, torch.Tensor]:
+) -> tuple[dict[str, torch.Tensor], float]:
     """
 
     q_error_T = W^T - W_q^T
@@ -117,8 +117,11 @@ def _compute_scales_and_error_for_fc(
     A_name = layer_name + ".A"
     B_name = layer_name + ".B"
 
-    mean_squared_error = torch.nn.functional.mse_loss(weight.transpose(0, 1), weight_q.transpose(0, 1) + A @ B)
-
+    mean_squared_error = (
+        torch.nn.functional.mse_loss(weight.transpose(0, 1), weight_q.transpose(0, 1) + A @ B).cpu().item()
+    )
+    if mean_squared_error > 1e-3:
+        logger.warning(f"Mean squared error for {layer_name}: {mean_squared_error}")
     return {A_name: A, B_name: B}, mean_squared_error
 
 

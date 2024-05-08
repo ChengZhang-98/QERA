@@ -21,6 +21,18 @@ from .utils import create_device_map
 logger = logging.getLogger(__name__)
 
 
+def _mse_threshold_emoji(mse: float) -> str:
+    warning_threshold = 1e-4
+    error_threshold = 0.1
+
+    if mse < warning_threshold:
+        return "✅"
+    elif mse < error_threshold:
+        return "⚠️"
+    else:
+        return "❌"
+
+
 def pipeline_loqer():
     parser = ArgumentParser()
     parser.add_argument("config", type=str, help="Path to the configuration file")
@@ -224,7 +236,9 @@ def pipeline_loqer():
             layers_to_approximate = find_layers_to_approximate(model)
             AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
             attach_AB(model, layers_to_approximate, AB_dict)
-            logger.info(f"Approximation error (mean squared error): \n{mse_df.to_markdown()}")
+            mse_df_emoji = mse_df.copy()
+            mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
+            logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
         else:
             logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
