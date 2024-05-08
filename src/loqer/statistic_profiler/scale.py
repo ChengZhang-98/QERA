@@ -1,5 +1,8 @@
 import math
 import logging
+import multiprocessing
+
+
 import torch
 import numpy as np
 from scipy import linalg as spla
@@ -223,14 +226,16 @@ class ScaleHookFactoryRxx:
                 self.compute_devices[name] = x.device
                 if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
-                self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
+                # self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
+                self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
 
             compute_device = self.compute_devices[name]
             scales = self.scales[name].to(compute_device)
             x = x.to(self.torch_dtype)
             # batched outer product
             # *: outer product in self.torch_dtype (float32 is preferred), then accumulate in float64
-            delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
+            # delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
+            delta = torch.einsum("bi,bj->ij", x, x).to(self.torch_dtype)
             scales += delta
             self.scales[name] = scales.cpu()
             self.n_samples[name] += n_samples
@@ -262,13 +267,27 @@ class ScaleHookFactoryRxx:
                 self.scales[name] = self.scales[name].numpy()
 
             # compute the square root
-            scale_names_prog_bar = tqdm.tqdm(
-                self.scales, desc="Computing scale", total=len(self.scales), disable=not progress_bar
-            )
-            for name in scale_names_prog_bar:
-                scale = self.scales[name]
-                scale = sqrtm_scipy(scale)
-                self.scales[name] = scale
+
+            # scale_names_prog_bar = tqdm.tqdm(
+            #     self.scales, desc="Computing scale", total=len(self.scales), disable=not progress_bar
+            # )
+            # for name in scale_names_prog_bar:
+            #     scale = self.scales[name]
+            #     scale = sqrtm_scipy(scale)
+            #     self.scales[name] = scale
+
+            # compute the square root in parallel, no progress bar
+
+            num_cores = multiprocessing.cpu_count()
+            num_processes = max(1, num_cores // 64)
+
+            with multiprocessing.Pool(num_processes) as pool:
+                self.scales = dict(
+                    zip(
+                        self.scales.keys(),
+                        pool.map(sqrtm_scipy, self.scales.values()),
+                    )
+                )
 
             # convert to torch tensor
             for name in self.scales:
