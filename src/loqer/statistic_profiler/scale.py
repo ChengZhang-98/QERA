@@ -226,16 +226,16 @@ class ScaleHookFactoryRxx:
                 self.compute_devices[name] = x.device
                 if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
-                # self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
-                self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
+                self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
+                # self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
 
             compute_device = self.compute_devices[name]
             scales = self.scales[name].to(compute_device)
             x = x.to(self.torch_dtype)
             # batched outer product
             # *: outer product in self.torch_dtype (float32 is preferred), then accumulate in float64
-            # delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
-            delta = torch.einsum("bi,bj->ij", x, x).to(self.torch_dtype)
+            delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
+            # delta = torch.einsum("bi,bj->ij", x, x).to(self.torch_dtype)
             scales += delta
             self.scales[name] = scales.cpu()
             self.n_samples[name] += n_samples
