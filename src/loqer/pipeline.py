@@ -155,14 +155,15 @@ def pipeline_loqer():
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # sqrtm_implementation
-    if loqer_sqrtm_implementation == "blocked":
-        # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
-        logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
-    elif loqer_sqrtm_implementation == "iterative":
-        # refer to https://link.springer.com/article/10.1023/A:1019150005407
-        logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
-    else:
-        raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
+    if loqer_scaling_mode == "rxx":
+        if loqer_sqrtm_implementation == "blocked":
+            # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
+            logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
+        elif loqer_sqrtm_implementation == "iterative":
+            # refer to https://link.springer.com/article/10.1023/A:1019150005407
+            logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
+        else:
+            raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
