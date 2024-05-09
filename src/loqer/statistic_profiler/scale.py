@@ -1,10 +1,13 @@
 import math
 import logging
+import multiprocessing
+
+
 import torch
 import numpy as np
 from scipy import linalg as spla
 from numpy import linalg as la
-import tqdm
+from tqdm.auto import tqdm
 from ..utils import get_layer_by_name, get_layer_name
 
 logger = logging.getLogger(__name__)
@@ -58,7 +61,7 @@ class ScaleHookFactoryDiagonal:
 
     @torch.no_grad()
     def get_scale_dict(self, progress_bar=False) -> dict[str, torch.Tensor]:
-        scale_names_prog_bar = tqdm.tqdm(
+        scale_names_prog_bar = tqdm(
             self.scales, desc="Computing scale", disable=not progress_bar, total=len(self.scales)
         )
 
@@ -224,6 +227,7 @@ class ScaleHookFactoryRxx:
                 if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
                 self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
+                # self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
 
             compute_device = self.compute_devices[name]
             scales = self.scales[name].to(compute_device)
@@ -231,6 +235,7 @@ class ScaleHookFactoryRxx:
             # batched outer product
             # *: outer product in self.torch_dtype (float32 is preferred), then accumulate in float64
             delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
+            # delta = torch.einsum("bi,bj->ij", x, x).to(self.torch_dtype)
             scales += delta
             self.scales[name] = scales.cpu()
             self.n_samples[name] += n_samples
@@ -244,7 +249,7 @@ class ScaleHookFactoryRxx:
 
         if sqrtm_implementation == "iterative":
             ...
-            scale_names_prog_bar = tqdm.tqdm(
+            scale_names_prog_bar = tqdm(
                 self.scales, desc="Computing scale", disable=not progress_bar, total=len(self.scales)
             )
             for name in scale_names_prog_bar:
@@ -261,14 +266,38 @@ class ScaleHookFactoryRxx:
             for name in self.scales:
                 self.scales[name] = self.scales[name].numpy()
 
-            # compute the square root
-            scale_names_prog_bar = tqdm.tqdm(
-                self.scales, desc="Computing scale", total=len(self.scales), disable=not progress_bar
-            )
-            for name in scale_names_prog_bar:
-                scale = self.scales[name]
-                scale = sqrtm_scipy(scale)
-                self.scales[name] = scale
+            # *: compute the square root sequentially
+
+            # scale_names_prog_bar = tqdm.tqdm(
+            #     self.scales, desc="Computing scale", total=len(self.scales), disable=not progress_bar
+            # )
+            # for name in scale_names_prog_bar:
+            #     scale = self.scales[name]
+            #     scale = sqrtm_scipy(scale)
+            #     self.scales[name] = scale
+
+            # *: compute the square root in parallel, no progress bar
+
+            # num_cores = multiprocessing.cpu_count()
+            # num_processes = max(1, num_cores // 64)
+
+            # with multiprocessing.Pool(num_processes) as pool:
+            #     self.scales = dict(
+            #         zip(
+            #             self.scales.keys(),
+            #             pool.map(sqrtm_scipy, self.scales.values()),
+            #         )
+            #     )
+
+            # *: compute the square root in parallel, with progress bar
+            num_cores = multiprocessing.cpu_count()
+            num_processes = max(1, num_cores // 64)
+
+            with multiprocessing.Pool(num_processes) as pool:
+                with tqdm(total=len(self.scales), desc="Computing scale", disable=not progress_bar) as pbar:
+                    for name, scale in zip(self.scales.keys(), pool.imap(sqrtm_scipy, self.scales.values())):
+                        self.scales[name] = scale
+                        pbar.update()
 
             # convert to torch tensor
             for name in self.scales:

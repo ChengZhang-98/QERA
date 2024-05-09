@@ -21,6 +21,18 @@ from .utils import create_device_map
 logger = logging.getLogger(__name__)
 
 
+def _mse_threshold_emoji(mse: float) -> str:
+    warning_threshold = 1e-4
+    error_threshold = 0.1
+
+    if mse < warning_threshold:
+        return "✅"
+    elif mse < error_threshold:
+        return "⚠️"
+    else:
+        return "❌"
+
+
 def pipeline_loqer():
     parser = ArgumentParser()
     parser.add_argument("config", type=str, help="Path to the configuration file")
@@ -143,14 +155,15 @@ def pipeline_loqer():
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # sqrtm_implementation
-    if loqer_sqrtm_implementation == "blocked":
-        # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
-        logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
-    elif loqer_sqrtm_implementation == "iterative":
-        # refer to https://link.springer.com/article/10.1023/A:1019150005407
-        logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
-    else:
-        raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
+    if loqer_scaling_mode == "rxx":
+        if loqer_sqrtm_implementation == "blocked":
+            # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
+            logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
+        elif loqer_sqrtm_implementation == "iterative":
+            # refer to https://link.springer.com/article/10.1023/A:1019150005407
+            logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
+        else:
+            raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -183,6 +196,7 @@ def pipeline_loqer():
             padding="max_length",
             max_length=perplexity_max_seq_length,
             num_raw_samples=20 * num_calibration_samples,
+            num_workers=num_workers,
         )
 
         calibration_dataloader = DataLoader(
@@ -224,7 +238,9 @@ def pipeline_loqer():
             layers_to_approximate = find_layers_to_approximate(model)
             AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
             attach_AB(model, layers_to_approximate, AB_dict)
-            logger.info(f"Approximation error (mean squared error): \n{mse_df.to_markdown()}")
+            mse_df_emoji = mse_df.copy()
+            mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
+            logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
         else:
             logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
@@ -241,6 +257,7 @@ def pipeline_loqer():
             padding="max_length",
             max_length=perplexity_max_seq_length,
             num_raw_samples=None,
+            num_workers=num_workers,
         )
         eval_dataloader = DataLoader(
             eval_datamodule["test"],
@@ -395,6 +412,7 @@ def pipeline_fp16():
             padding="max_length",
             max_length=perplexity_max_seq_length,
             num_raw_samples=None,
+            num_workers=num_workers,
         )
         perplexity_dataloader = DataLoader(
             perplexity_datamodule["test"],
