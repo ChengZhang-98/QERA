@@ -346,7 +346,7 @@ def quantize_opt_model(
     return model
 
 
-def find_layers_to_register_scale_hook_opt(model: OPTForCausalLM):
+def find_layers_to_register_scale_hook_opt(model: OPTForCausalLM) -> list[dict[str, str | list[str]]]:
     assert model.config._attn_implementation == "eager"
 
     layers_to_register = []
