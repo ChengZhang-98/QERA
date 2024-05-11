@@ -1,0 +1,72 @@
+model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+# Note that the dtype for statistic profiling is hard-coded float32,
+# since the SVD of float16 is not supported by pytorch
+loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
+eval_dtype: float16 # the precision for evaluation
+device_map: auto-balance
+num_workers: 8
+output_dir: null
+disable_perplexity_eval: false
+disable_lm_eval: false
+
+# chunked
+layers_per_chunk: 8
+chunk_id: null
+
+# calibration & perplexity
+calibration_set: "slim_pajama_6b"
+num_calibration_samples: 256
+perplexity_eval_batch_size: 4
+perplexity_eval_set: "wikitext2"
+perplexity_max_seq_length: 2048
+# lm-eval-harness
+lm_eval_tasks:
+  [
+    "arc_easy",
+    "lambada_openai",
+    "piqa",
+    "winogrande",
+    "arc_challenge",
+    "boolq",
+    "openbookqa",
+  ]
+lm_eval_batch_size: 4
+lm_eval_num_fewshot: 0
+
+# LoQER
+disable_loqer: false # if true, quantization only without A & B
+loqer_scaling_mode: rxx # "rxx" or "diagonal"
+loqer_sqrtm_implementation: iterative
+loqer_sqrtm_num_iters: 100
+loqer_config:
+  # llama/mistral
+  'model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj': default-1
+  'model\.layers\.[0-9]+\.mlp\.(gate|down|up)_proj': default-1
+  'model\.layers\.[0-9]+\.self_attn\.(matmul_0|matmul_1)': default-matmul
+  # opt
+  'model\.decoder\.layers\.[0-9]+\.self_attn\.(k|q|v|out)_proj': default-1
+  'model\.decoder\.layers\.[0-9]+\.(fc1|fc2)': default-1
+  'model\.decoder\.layers\.[0-9]+\.self_attn\.(bmm_0|bmm_1)': default-matmul
+
+  default-1:
+    rank: 32
+    name: loqer
+    is_ptq: true
+    x_quantizer:
+      name: bypass
+    w_quantizer:
+      name: block_fp
+      width: 4
+      exponent_width: 8
+      exponent_bias: null
+      block_size: [1, 32]
+      skip_first_dim: false
+    b_quantizer:
+      name: bypass
+
+  default-matmul:
+    name: flexible
+    x_quantizer:
+      name: bypass
+    w_quantizer:
+      name: bypass
