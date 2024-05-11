@@ -2,6 +2,21 @@ import sys
 import re
 import torch
 from accelerate import infer_auto_device_map
+from nvitop import CudaDevice, parse_cuda_visible_devices
+
+
+def get_all_device_mem_info() -> dict[int, dict[str, int]]:
+    visible_devices = parse_cuda_visible_devices()
+    visible_devices = [CudaDevice(i) for i in visible_devices]
+    memory_info = {}
+    for device in visible_devices:
+        mem_info_i = device.memory_info()
+        memory_info[device.index] = {
+            "total (GB)": round(mem_info_i.total / 1024**3, 2),
+            "used (GB)": round(mem_info_i.used / 1024**3, 2),
+            "free (GB)": round(mem_info_i.free / 1024**3, 2),
+        }
+    return memory_info
 
 
 def find_matched_pattern(query: str, patterns: list[str]) -> str | None:

@@ -18,7 +18,7 @@ from .datasets import get_data_module
 from .evaluate import evaluate_perplexity, evaluate_harness_downstream
 from .models import find_layers_to_approximate, quantize_model, find_layers_to_register_scale_hook
 from .approximate import compute_AB_and_approximation_error, attach_AB
-from .utils import create_device_map
+from .utils import create_device_map, get_all_device_mem_info
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,8 @@ def pipeline_loqer():
             collate_fn=data_collator,
         )
 
+        mem_info = get_all_device_mem_info()
+        logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
         profile_outputs = evaluate_perplexity(
             model=model,
             eval_dataloader=calibration_dataloader,
@@ -626,7 +628,7 @@ def pipeline_q_baseline():
             yaml.dump(vars(args), f)
 
 
-def check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
+def _check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
     """
     Check if the chunk_id is valid for the given model and layers_per_chunk.
     """
@@ -651,7 +653,7 @@ def check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
     return num_chunks
 
 
-def verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag=None) -> set[str]:
+def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag=None) -> set[str]:
     chunks_to_check = [f"{i}-of-{num_chunks}.pt" for i in range(num_chunks)]
     if current_chunk_tag is not None:
         chunks_to_check.remove(current_chunk_tag + ".pt")
@@ -789,12 +791,12 @@ def pipeline_loqer_chunked():
     # assert chunk_id is not None
     assert output_dir is not None
 
-    num_chunks = check_chunk_id(model_name, layers_per_chunk, chunk_id)
+    num_chunks = _check_chunk_id(model_name, layers_per_chunk, chunk_id)
     chunk_tag = f"{chunk_id}-of-{num_chunks}"
 
     # check output directory
     AB_dict_dir = output_dir.joinpath("AB_dict")
-    missing_chunks = verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None)
+    missing_chunks = _verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None)
     assert not (len(missing_chunks) > 0 and chunk_id is None), f"Missing chunks: {missing_chunks}"
 
     if len(missing_chunks) > 0:
@@ -860,6 +862,8 @@ def pipeline_loqer_chunked():
             collate_fn=data_collator,
         )
 
+        mem_info = get_all_device_mem_info()
+        logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
         profile_outputs = evaluate_perplexity(
             model=model,
             eval_dataloader=calibration_dataloader,
@@ -893,7 +897,7 @@ def pipeline_loqer_chunked():
         mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
         logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
 
-        missing_chunks = verify_AB_dict_chunks(
+        missing_chunks = _verify_AB_dict_chunks(
             AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=chunk_tag
         )
 
@@ -1010,7 +1014,7 @@ def chunk_checker():
     layers_per_chunk = args.layers_per_chunk
     output_dir = Path(args.output_dir) if args.output_dir is not None else None
 
-    num_chunks = check_chunk_id(model_name, layers_per_chunk, None)
+    num_chunks = _check_chunk_id(model_name, layers_per_chunk, None)
 
     if output_dir is not None:
         AB_dict_dir = output_dir.joinpath("AB_dict")
@@ -1018,7 +1022,7 @@ def chunk_checker():
             logger.warning(f"Output directory {output_dir} does not exist.")
             return
         else:
-            missing_chunks = verify_AB_dict_chunks(
+            missing_chunks = _verify_AB_dict_chunks(
                 AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None
             )
             logger.info(f"Missing chunks: \n{pformat(missing_chunks)}")
