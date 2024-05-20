@@ -6,7 +6,12 @@ import torch
 from tqdm import tqdm
 import pandas as pd
 
-from .utils import find_matched_pattern, get_layer_by_name, get_layer_name, set_layer_by_name, setattr_recursive
+from .utils import (
+    find_matched_pattern,
+    get_layer_by_name,
+    get_full_device_map,
+    move_module_to_device,
+)
 from .quantize import get_quantizer
 
 logger = logging.getLogger(__name__)
@@ -14,12 +19,22 @@ logger = logging.getLogger(__name__)
 
 @torch.no_grad()
 def compute_AB_and_approximation_error(
-    model, layers_to_approximate: list[str], scale_dict: dict[str, torch.Tensor], loqer_config: dict
+    model,
+    layers_to_approximate: list[str],
+    scale_dict: dict[str, torch.Tensor],
+    loqer_config: dict,
+    move_model_back: bool = True,
 ):
     AB_dict = {}
     df = pd.DataFrame(columns=["layer_name", "mse", "rank"])
 
+    full_device_map = get_full_device_map(model)
+    model.to("cpu")
+
     for layer_name in tqdm(layers_to_approximate, desc="Computing low-rank A and B"):
+        # device
+        layer = get_layer_by_name(model, layer_name)
+        layer.to(full_device_map[layer_name])
         # scale
         scale = scale_dict[layer_name].clone()
         # loqer config
@@ -27,9 +42,14 @@ def compute_AB_and_approximation_error(
         if isinstance(matched_entry, str):
             matched_entry = loqer_config[matched_entry]
         layer_loqer_config = deepcopy(loqer_config[matched_entry])
-        layer_AB_dict, mse = _compute_scales_and_error_for_fc(model, layer_name, scale, layer_loqer_config)
+        layer_AB_dict, mse = _compute_scales_and_error_for_fc(layer_name, layer, scale, layer_loqer_config)
         AB_dict.update(layer_AB_dict)
         df.loc[len(df)] = [layer_name, mse, layer_loqer_config["rank"]]
+
+        layer.to("cpu")
+
+    if move_model_back:
+        move_module_to_device(model, full_device_map)
 
     return AB_dict, df
 
@@ -58,7 +78,7 @@ def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tens
 
 
 def _compute_scales_and_error_for_fc(
-    model: torch.nn.Module, layer_name: str, scale: torch.Tensor, layer_loqer_config: dict
+    layer_name: str, layer: torch.nn.Linear, scale: torch.Tensor, layer_loqer_config: dict
 ) -> tuple[dict[str, torch.Tensor], float]:
     """
 
@@ -85,7 +105,6 @@ def _compute_scales_and_error_for_fc(
 
     ab_quantizer = partial(get_quantizer(ab_q_config.pop("name")), **ab_q_config)
 
-    layer: torch.nn.Linear = get_layer_by_name(model, layer_name)
     weight = layer.weight
 
     weight_q = w_quantizer(weight)

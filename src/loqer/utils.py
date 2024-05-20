@@ -1,5 +1,6 @@
 import sys
 import re
+from itertools import chain
 import torch
 from accelerate import infer_auto_device_map
 from nvitop import CudaDevice, parse_cuda_visible_devices
@@ -132,3 +133,19 @@ def enable_exception_hook(debugger="ipdb"):
 
     else:
         raise ValueError(f"Unknown debugger: {debugger}")
+
+
+def get_full_device_map(model: torch.nn.Module):
+    device_map = {}
+    for name, module in model.named_modules():
+        try:
+            device_map[name] = next(chain(module.parameters(), module.buffers())).device
+        except StopIteration:
+            pass
+    return device_map
+
+
+def move_module_to_device(module, device_map: dict):
+    for name, device in device_map.items():
+        module_ = get_layer_by_name(module, name)
+        module_.to(device)

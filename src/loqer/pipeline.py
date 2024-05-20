@@ -241,6 +241,7 @@ def pipeline_loqer():
             logger.info("🚀 Loqer is enabled. Computing A & B...")
             layers_to_approximate = find_layers_to_approximate(model)
             AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+            del scale_dict
             attach_AB(model, layers_to_approximate, AB_dict)
             mse_df_emoji = mse_df.copy()
             mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
@@ -654,7 +655,7 @@ def _check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
 
 
 def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag=None) -> set[str]:
-    chunks_to_check = [f"{i}-of-{num_chunks}.pt" for i in range(num_chunks)]
+    chunks_to_check = [f"{i}-of-{num_chunks-1}.pt" for i in range(num_chunks)]
     if current_chunk_tag is not None:
         chunks_to_check.remove(current_chunk_tag + ".pt")
 
@@ -792,7 +793,7 @@ def pipeline_loqer_chunked():
     assert output_dir is not None
 
     num_chunks = _check_chunk_id(model_name, layers_per_chunk, chunk_id)
-    chunk_tag = f"{chunk_id}-of-{num_chunks}"
+    chunk_tag = f"{chunk_id}-of-{num_chunks-1}"
 
     # check output directory
     AB_dict_dir = output_dir.joinpath("AB_dict")
@@ -892,7 +893,10 @@ def pipeline_loqer_chunked():
         logger.info("🚀 Loqer is enabled. Computing A & B...")
         layers_to_approximate = find_layers_to_approximate(model)
         layers_to_approximate = list(filter(lambda x: x in scale_dict, layers_to_approximate))
-        AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+        AB_dict, mse_df = compute_AB_and_approximation_error(
+            model, layers_to_approximate, scale_dict, loqer_config, move_model_back=False
+        )
+        del scale_dict
         mse_df_emoji = mse_df.copy()
         mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
         logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
@@ -1025,4 +1029,4 @@ def chunk_checker():
             missing_chunks = _verify_AB_dict_chunks(
                 AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None
             )
-            logger.info(f"Missing chunks: \n{pformat(missing_chunks)}")
+            logger.info(f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}")
