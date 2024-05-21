@@ -1029,4 +1029,7 @@ def chunk_checker():
             missing_chunks = _verify_AB_dict_chunks(
                 AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None
             )
-            logger.info(f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}")
+            if len(missing_chunks) == 0:
+                logger.info("All chunks are ready.")
+            else:
+                logger.info(f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}")
