@@ -966,6 +966,8 @@ def pipeline_loqer_chunked():
             )
             model = model.to(eval_dtype)
             model = dispatch_model(model, device_map)
+            mem_info = get_all_device_mem_info()
+            logger.info(f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}")
             ppl_results = evaluate_perplexity(
                 model=model,
                 eval_dataloader=eval_dataloader,

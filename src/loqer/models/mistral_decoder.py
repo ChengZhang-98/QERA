@@ -322,7 +322,9 @@ def quantize_mistral_model(
 
         # replace the decoder layer with quantized decoder layer
         new_decoder_layer = MistralQuantizedDecoderLayer(model.config, layer_id, layer_q_config)
+        ori_rope = ori_decoder_layer.self_attn.rotary_emb
         new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).dtype)
+        new_decoder_layer.self_attn.rotary_emb = ori_rope
         new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).device)
         new_decoder_layer.load_state_dict(ori_decoder_layer.state_dict(), strict=False)
         model.model.layers[layer_id] = new_decoder_layer
@@ -332,6 +334,7 @@ def quantize_mistral_model(
     model._no_split_modules = ["MistralDecoderLayer", "MistralQuantizedDecoderLayer"]
 
     return model
+
 
 def find_layers_to_register_scale_hook_mistral(model: MistralForCausalLM) -> list[dict[str, str | list[str]]]:
     """
