@@ -4,14 +4,16 @@ from argparse import ArgumentParser
 from pathlib import Path
 from pprint import pformat
 import math
-from tqdm.auto import tqdm
+import datetime
 
+from tqdm.auto import tqdm
 import torch
 from torch.utils.data import DataLoader
 import transformers
 from accelerate import dispatch_model, init_empty_weights
 from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
 from auto_gptq import exllama_set_max_input_length
+import pandas as pd
 
 from .statistic_profiler import register_scale_hooks, share_scales
 from .datasets import get_data_module
@@ -1035,3 +1037,44 @@ def chunk_checker():
                 logger.info("All chunks are ready.")
             else:
                 logger.info(f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}")
+
+
+def merge_chunked_results():
+    parser = ArgumentParser()
+    parser.add_argument("output_dir", type=str, help="Output directory")
+    parser.add_argument(
+        "--quick-save",
+        "-s",
+        dest="quick_save",
+        action="store_true",
+        help="Save merged results to $output_dir/approximation_error/quick-save-$timestamp.csv",
+        default=False,
+    )
+    parser.add_argument("--output-file", "-o", dest="output_file", type=str, help="Output file", default=None)
+    args = parser.parse_args()
+
+    output_dir = Path(args.output_dir)
+    approx_error_dir = output_dir.joinpath("approximation_error")
+    assert approx_error_dir.is_dir(), f"Directory {approx_error_dir} does not exist."
+
+    df = None
+    for file in approx_error_dir.iterdir():
+        if not file.is_file() or not file.name.endswith(".csv"):
+            continue
+
+        chunk_df = pd.read_csv(file)
+        if df is None:
+            df = chunk_df
+        else:
+            df = pd.concat([df, chunk_df], ignore_index=True)
+
+    logger.info(f"Merged approximation error: \n{df.to_markdown()}")
+
+    if args.quick_save:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        df.to_csv(approx_error_dir.joinpath(f"quick-save-{timestamp}.csv"), index=False)
+        logger.info(f"Quick save to {approx_error_dir.joinpath(f'quick-save-{timestamp}.csv')}")
+
+    if args.output_file is not None:
+        df.to_csv(args.output_file, index=False)
+        logger.info(f"Saved to {args.output_file}")
