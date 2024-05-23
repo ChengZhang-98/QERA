@@ -3,7 +3,7 @@ model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 # since the SVD of float16 is not supported by pytorch
 loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
 eval_dtype: float16 # the precision for evaluation
-device_map: auto-balance
+device_map: auto-balanced
 num_workers: 8
 output_dir: null
 disable_perplexity_eval: false
@@ -55,12 +55,10 @@ loqer_config:
     x_quantizer:
       name: bypass
     w_quantizer:
-      name: block_fp
+      name: mxint
       width: 4
-      exponent_width: 8
-      exponent_bias: null
-      block_size: [1, 32]
-      skip_first_dim: false
+      block_size: 32
+      block_axis: -1
     b_quantizer:
       name: bypass
 
