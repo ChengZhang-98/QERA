@@ -33,7 +33,7 @@ lm_eval_num_fewshot: 0
 # LoQER
 disable_loqer: false # if true, quantization only without A & B
 loqer_scaling_mode: rxx # "rxx" or "diagonal"
-loqer_sqrtm_implementation: iterative
+loqer_sqrtm_implementation: blocked # "blocked" or "iterative"
 loqer_sqrtm_num_iters: 100
 loqer_config:
   # llama/mistral
