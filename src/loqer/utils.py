@@ -1,3 +1,4 @@
+import os
 import sys
 import re
 from itertools import chain
@@ -7,7 +8,7 @@ from nvitop import CudaDevice, parse_cuda_visible_devices
 
 
 def get_all_device_mem_info() -> dict[int, dict[str, int]]:
-    visible_devices = parse_cuda_visible_devices()
+    visible_devices = parse_cuda_visible_devices(os.getenv("CUDA_VISIBLE_DEVICES", None))
     visible_devices = [CudaDevice(i) for i in visible_devices]
     memory_info = {}
     for device in visible_devices:
@@ -79,7 +80,7 @@ def create_device_map(model, device_map) -> dict[str, int]:
             model,
             no_split_module_classes=model._no_split_modules,
         )
-    elif device_map == "auto-balance":
+    elif device_map == "auto-balanced":
         max_memory = {i: torch.cuda.mem_get_info(i)[0] // 2 for i in range(torch.cuda.device_count())}
         device_map = infer_auto_device_map(
             model,

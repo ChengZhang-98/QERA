@@ -332,7 +332,7 @@ def pipeline_fp16():
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
     parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
-    parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default="auto-balance")
+    parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default="auto-balanced")
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
     parser.add_argument(

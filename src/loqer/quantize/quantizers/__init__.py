@@ -2,6 +2,7 @@ from .block_fp import block_fp_quantizer
 from .integer import int_quantizer
 from .minifloat import minifloat_ieee_quantizer
 from .passthrough import bypass_quantizer
+from .mxint import mxint_quantizer
 
 
 def get_quantizer(name: str):
@@ -10,6 +11,8 @@ def get_quantizer(name: str):
             return bypass_quantizer
         case "block_fp":
             return block_fp_quantizer
+        case "mxint":
+            return mxint_quantizer
         case "integer":
             return int_quantizer
         case "minifloat":
