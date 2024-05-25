@@ -1,4 +1,5 @@
 import logging
+import re
 import yaml
 from argparse import ArgumentParser
 from pathlib import Path
@@ -92,9 +93,9 @@ def pipeline_loqer():
         "--loqer-scaling-mode",
         dest="loqer_scaling_mode",
         type=str,
-        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'dummy'].",
+        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
         default=None,
-        choices=["diagonal", "diag", "rxx", "dummy"],  # "diag" is alias of "diagonal"
+        choices=["diagonal", "diag", "rxx", "identity", "mixed"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
         "--loqer-sqrtm-implementation",
@@ -153,13 +154,14 @@ def pipeline_loqer():
     loqer_config = config["loqer_config"]
     disable_perplexity_eval = config["disable_perplexity_eval"]
     disable_lm_eval = config["disable_lm_eval"]
+    loqer_scaling_mode_map = config["loqer_scaling_mode_map"]
 
     # check output directory
     if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # sqrtm_implementation
-    if loqer_scaling_mode == "rxx":
+    if loqer_scaling_mode in ["rxx", "mixed"]:
         if loqer_sqrtm_implementation == "blocked":
             # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
             logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
@@ -183,8 +185,8 @@ def pipeline_loqer():
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if not disable_loqer and AB_dict is None:
-        if loqer_scaling_mode == "dummy":
-            logger.info("🔊 Using dummy scale (torch.ones)")
+        if loqer_scaling_mode == "identity":
+            logger.info("🔊 Using identity scale (torch.eye)")
         logger.info("🚀 Running data calibration...")
         layers_to_register_and_share = find_layers_to_register_scale_hook(model)
         profiler_factory = register_scale_hooks(
@@ -192,6 +194,7 @@ def pipeline_loqer():
             layers_to_register_and_share=layers_to_register_and_share,
             mode=loqer_scaling_mode,
             torch_dtype=loqer_dtype,
+            mode_map=loqer_scaling_mode_map,
         )
 
         calibration_datamodule = get_data_module(
@@ -216,7 +219,7 @@ def pipeline_loqer():
         profile_outputs = evaluate_perplexity(
             model=model,
             eval_dataloader=calibration_dataloader,
-            num_samples=num_calibration_samples if loqer_scaling_mode != "dummy" else perplexity_eval_batch_size,
+            num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
             progress_bar=True,
             input_device=None,
             description="Calibrating",
@@ -724,9 +727,9 @@ def pipeline_loqer_chunked():
         "--loqer-scaling-mode",
         dest="loqer_scaling_mode",
         type=str,
-        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'dummy'].",
+        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
         default=None,
-        choices=["diagonal", "diag", "rxx", "dummy"],  # "diag" is alias of "diagonal"
+        choices=["diagonal", "diag", "rxx", "identity", "mixed"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
         "--loqer-sqrtm-implementation",
@@ -787,6 +790,7 @@ def pipeline_loqer_chunked():
     loqer_config = config["loqer_config"]
     disable_perplexity_eval = config["disable_perplexity_eval"]
     disable_lm_eval = config["disable_lm_eval"]
+    loqer_scaling_mode_map = config["loqer_scaling_mode_map"]
 
     layers_per_chunk = config["layers_per_chunk"]
     chunk_id = config["chunk_id"]
@@ -807,11 +811,11 @@ def pipeline_loqer_chunked():
         if disable_loqer:
             raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
         else:
-            if loqer_scaling_mode not in ["diag", "diagonal", "rxx"]:
-                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx']")
+            if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed"]:
+                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed']")
 
         # sqrtm_implementation
-        if loqer_scaling_mode == "rxx":
+        if loqer_scaling_mode in ["rxx", "mixed"]:
             if loqer_sqrtm_implementation == "blocked":
                 # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
                 logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
@@ -846,6 +850,7 @@ def pipeline_loqer_chunked():
             layers_to_register_and_share=layers_to_register_and_share,
             mode=loqer_scaling_mode,
             torch_dtype=loqer_dtype,
+            mode_map=loqer_scaling_mode_map,
         )
 
         calibration_datamodule = get_data_module(
@@ -870,14 +875,14 @@ def pipeline_loqer_chunked():
         profile_outputs = evaluate_perplexity(
             model=model,
             eval_dataloader=calibration_dataloader,
-            num_samples=num_calibration_samples if loqer_scaling_mode != "dummy" else perplexity_eval_batch_size,
+            num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
             progress_bar=True,
             input_device=None,
             description="Calibrating",
         )
 
         profiler_factory.remove_all_hooks()
-        if loqer_scaling_mode == "rxx":
+        if loqer_scaling_mode in ["rxx", "mixed"]:
             scale_dict = profiler_factory.get_scale_dict(
                 progress_bar=True,
                 sqrtm_implementation=loqer_sqrtm_implementation,
@@ -1039,6 +1044,26 @@ def chunk_checker():
                 logger.info(f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}")
 
 
+def _merge_chunked_approximation_error(approx_error_dir: Path):
+    if isinstance(approx_error_dir, str):
+        approx_error_dir = Path(approx_error_dir)
+    df = None
+    for file in approx_error_dir.iterdir():
+        if not file.is_file():
+            continue
+
+        if not re.match(r"\d+-of-\d+.csv", file.name):
+            continue
+
+        chunk_df = pd.read_csv(file)
+        if df is None:
+            df = chunk_df
+        else:
+            df = pd.concat([df, chunk_df], ignore_index=True)
+
+    return df
+
+
 def merge_chunked_results():
     parser = ArgumentParser()
     parser.add_argument("output_dir", type=str, help="Output directory")
@@ -1057,16 +1082,18 @@ def merge_chunked_results():
     approx_error_dir = output_dir.joinpath("approximation_error")
     assert approx_error_dir.is_dir(), f"Directory {approx_error_dir} does not exist."
 
-    df = None
-    for file in approx_error_dir.iterdir():
-        if not file.is_file() or not file.name.endswith(".csv"):
-            continue
+    # df = None
+    # for file in approx_error_dir.iterdir():
+    #     if not file.is_file() or not file.name.endswith(".csv"):
+    #         continue
 
-        chunk_df = pd.read_csv(file)
-        if df is None:
-            df = chunk_df
-        else:
-            df = pd.concat([df, chunk_df], ignore_index=True)
+    #     chunk_df = pd.read_csv(file)
+    #     if df is None:
+    #         df = chunk_df
+    #     else:
+    #         df = pd.concat([df, chunk_df], ignore_index=True)
+
+    df = _merge_chunked_approximation_error(approx_error_dir)
 
     logger.info(f"Merged approximation error: \n{df.to_markdown()}")
 

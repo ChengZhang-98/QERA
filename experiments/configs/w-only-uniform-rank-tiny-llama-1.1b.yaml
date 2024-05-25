@@ -37,8 +37,8 @@ loqer_sqrtm_implementation: blocked # "blocked" or "iterative"
 loqer_sqrtm_num_iters: 100
 loqer_scaling_mode_map:
   # llama/mistral
-  'model\.layers\.[0-9]+\.self_attn\.(k|q|v)_proj': rxx
-  'model\.layers\.[0-9]+\.self_attn\.o_proj': diag
+  'model\.layers\.[0-9]+\.self_attn\.(k|q)_proj': rxx
+  'model\.layers\.[0-9]+\.self_attn\.(v|o)_proj': diag
   'model\.layers\.[0-9]+\.mlp\.(gate|up)_proj': rxx
   'model\.layers\.[0-9]+\.mlp\.down_proj': diag
 loqer_config:
