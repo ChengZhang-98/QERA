@@ -8,6 +8,7 @@ num_workers: 8
 output_dir: null
 disable_perplexity_eval: false
 disable_lm_eval: false
+overwrite_output_dir: null
 
 # calibration & perplexity
 AB_dict: null
@@ -35,6 +36,7 @@ disable_loqer: false # if true, quantization only without A & B
 loqer_scaling_mode: rxx # "rxx" or "diagonal"
 loqer_sqrtm_implementation: iterative
 loqer_sqrtm_num_iters: 100
+loqer_scaling_mode_map: null
 loqer_config:
   # llama/mistral
   'model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj': default-1

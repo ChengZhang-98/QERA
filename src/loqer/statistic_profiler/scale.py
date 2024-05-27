@@ -8,7 +8,7 @@ import numpy as np
 from scipy import linalg as spla
 from numpy import linalg as la
 from tqdm.auto import tqdm
-from ..utils import get_layer_by_name, get_layer_name
+from ..utils import get_layer_by_name, get_layer_name, find_matched_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +244,7 @@ class ScaleHookFactoryRxx:
 
     @torch.no_grad()
     def get_scale_dict(
-        self, progress_bar=False, sqrtm_implementation: str = "newton_schulz", sqrtm_num_iters: int = 200
+        self, progress_bar=False, sqrtm_implementation: str = "blocked", sqrtm_num_iters: int = 200
     ) -> dict[str, torch.Tensor]:
 
         if sqrtm_implementation == "iterative":
@@ -317,16 +317,16 @@ class ScaleHookFactoryRxx:
         self.handles = []
 
 
-class ScaleHookFactoryDummy:
+class ScaleHookFactoryIdentity:
     """
-    dummy scale, which is torch.ones
+    identity scale, which is torch.ones, which is identity matrix after expansion
     """
 
     def __init__(self, torch_dtype) -> None:
         self.scales = {}
         self.in_features = {}
         self.handles = []
-        self.torch_dtype = None
+        self.torch_dtype = torch_dtype
 
     def get_scale_hook(self, name: str) -> callable:
         self.scales[name] = None
@@ -359,26 +359,83 @@ class ScaleHookFactoryDummy:
         self.handles = []
 
 
+class ScaleHookFactoryMixed:
+    def __init__(self, torch_dtype):
+        self.scale_hook_factory_diag = ScaleHookFactoryDiagonal(torch_dtype)
+        self.scale_hook_factory_rxx = ScaleHookFactoryRxx(torch_dtype)
+        self.scale_hook_factory_identity = ScaleHookFactoryIdentity(torch_dtype)
+        self.handles = []
+
+    def get_scale_hook_diag(self, name: str) -> callable:
+        logger.debug(f"Getting diag scale hook for {name}")
+        return self.scale_hook_factory_diag.get_scale_hook(name)
+
+    def get_scale_hook_rxx(self, name: str) -> callable:
+        logger.debug(f"Getting rxx scale hook for {name}")
+        return self.scale_hook_factory_rxx.get_scale_hook(name)
+
+    def get_scale_hook_identity(self, name: str) -> callable:
+        logger.debug(f"Getting identity scale hook for {name}")
+        return self.scale_hook_factory_identity.get_scale_hook(name)
+
+    def get_scale_dict(
+        self, progress_bar=False, sqrtm_implementation: str = "blocked", sqrtm_num_iters: int = 200
+    ) -> dict[str, torch.Tensor]:
+        scales_diag = self.scale_hook_factory_diag.get_scale_dict(progress_bar)
+        scales_rxx = self.scale_hook_factory_rxx.get_scale_dict(progress_bar, sqrtm_implementation, sqrtm_num_iters)
+        scales_identity = self.scale_hook_factory_identity.get_scale_dict()
+        scales = {**scales_diag, **scales_rxx, **scales_identity}
+        return scales
+
+    def remove_all_hooks(self):
+        for handle in self.handles:
+            handle.remove()
+        self.handles = []
+
+
 def register_scale_hooks(
     model: torch.nn.Module,
     layers_to_register_and_share: list[str],
     mode: str = "diagonal",
     torch_dtype: torch.dtype = None,
+    mode_map: dict[str, str] = None,
 ):
-    if mode in ["diagonal", "diag"]:
-        hook_factory = ScaleHookFactoryDiagonal(torch_dtype)
-    elif mode == "rxx":
-        hook_factory = ScaleHookFactoryRxx(torch_dtype)
-    elif mode == "dummy":
-        hook_factory = ScaleHookFactoryDummy()
+    if mode in ["diagonal", "diag", "rxx", "identity"]:
+        if mode in ["diagonal", "diag"]:
+            hook_factory = ScaleHookFactoryDiagonal(torch_dtype)
+        elif mode == "rxx":
+            hook_factory = ScaleHookFactoryRxx(torch_dtype)
+        elif mode == "identity":
+            hook_factory = ScaleHookFactoryIdentity(torch_dtype)
+        else:
+            raise ValueError(f"mode {mode} is not supported")
+
+        for target_and_share in layers_to_register_and_share:
+            target_layer_name = target_and_share["target_layer"]
+            target_layer = get_layer_by_name(model, target_layer_name)
+            handle = target_layer.register_forward_hook(hook_factory.get_scale_hook(target_layer_name))
+            hook_factory.handles.append(handle)
+    elif mode == "mixed":
+        assert isinstance(mode_map, dict)
+        hook_factory = ScaleHookFactoryMixed(torch_dtype)
+
+        for target_and_share in layers_to_register_and_share:
+            target_layer_name = target_and_share["target_layer"]
+            target_layer = get_layer_by_name(model, target_layer_name)
+            matched_pattern = find_matched_pattern(target_layer_name, list(mode_map.keys()))
+            assert matched_pattern is not None, f"Cannot find matched pattern for {target_layer_name}"
+            matched_mode = mode_map[matched_pattern]
+            if matched_mode == "diag":
+                handle = target_layer.register_forward_hook(hook_factory.get_scale_hook_diag(target_layer_name))
+            elif matched_mode == "rxx":
+                handle = target_layer.register_forward_hook(hook_factory.get_scale_hook_rxx(target_layer_name))
+            elif matched_mode == "identity":
+                handle = target_layer.register_forward_hook(hook_factory.get_scale_hook_identity(target_layer_name))
+            else:
+                raise ValueError(f"Unknown matched pattern: {matched_mode}")
+            hook_factory.handles.append(handle)
     else:
         raise ValueError(f"mode {mode} is not supported")
-
-    for target_and_share in layers_to_register_and_share:
-        target_layer_name = target_and_share["target_layer"]
-        target_layer = get_layer_by_name(model, target_layer_name)
-        handle = target_layer.register_forward_hook(hook_factory.get_scale_hook(target_layer_name))
-        hook_factory.handles.append(handle)
 
     return hook_factory
 
