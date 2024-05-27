@@ -114,6 +114,7 @@ def pipeline_loqer():
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
+    parser.add_argument("--overwrite-output-dir", "-ow", dest="overwrite_output_dir", action="store_true", default=None)
 
     args = parser.parse_args()
     args = vars(args)
@@ -155,10 +156,24 @@ def pipeline_loqer():
     disable_perplexity_eval = config["disable_perplexity_eval"]
     disable_lm_eval = config["disable_lm_eval"]
     loqer_scaling_mode_map = config["loqer_scaling_mode_map"]
+    overwrite_output_dir = config["overwrite_output_dir"]
 
     # check output directory
-    if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
-        raise ValueError(f"Output directory {output_dir} is not empty")
+    if overwrite_output_dir:
+        logger.warning("⚠️ Overwriting output directory")
+        AB_dict_in_output_dir = output_dir / "AB_dict.pt"
+        if AB_dict_in_output_dir.is_file():
+            if AB_dict is not None:
+                if Path(AB_dict) != AB_dict_in_output_dir:
+                    logger.warning(
+                        f"⚠️ AB_dict is specified but not the same as the one in the output directory: {AB_dict_in_output_dir}. Use the specified {AB_dict}"
+                    )
+            else:
+                AB_dict = AB_dict_in_output_dir
+                logger.warning(f"🔊 Using AB_dict in the output directory: {AB_dict}")
+    else:
+        if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
+            raise ValueError(f"Output directory {output_dir} is not empty")
 
     # sqrtm_implementation
     if loqer_scaling_mode in ["rxx", "mixed"]:
@@ -242,9 +257,9 @@ def pipeline_loqer():
     quantize_model(model, loqer_config)
 
     if not disable_loqer:
+        layers_to_approximate = find_layers_to_approximate(model)
         if AB_dict is None:
             logger.info("🚀 Loqer is enabled. Computing A & B...")
-            layers_to_approximate = find_layers_to_approximate(model)
             AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
             del scale_dict
             attach_AB(model, layers_to_approximate, AB_dict)
@@ -254,7 +269,8 @@ def pipeline_loqer():
         else:
             logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
-            attach_AB(model, list(AB_dict.keys()), AB_dict)
+            mse_df = None
+            attach_AB(model, layers_to_approximate, AB_dict)
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
     # logger.info(f"Model after approximation: \n{model}")
@@ -310,7 +326,7 @@ def pipeline_loqer():
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if not disable_loqer:
+        if not disable_loqer and mse_df is not None:
             # save approximation results
             mse_df.to_csv(output_dir / "approximation_error.csv", index=False)
             # save AB_dict

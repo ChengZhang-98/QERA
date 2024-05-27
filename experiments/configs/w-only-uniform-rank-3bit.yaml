@@ -60,7 +60,7 @@ loqer_config:
       name: bypass
     w_quantizer:
       name: mxint
-      width: 4
+      width: 3
       block_size: 32
       block_axis: -1
     b_quantizer:

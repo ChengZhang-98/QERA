@@ -459,9 +459,13 @@ def find_layers_to_register_scale_hook_llama(model: LlamaForCausalLM) -> list[di
     for decoder_layer in model.model.layers:
         k_name = get_layer_name(model, decoder_layer.self_attn.k_proj)
         q_name = get_layer_name(model, decoder_layer.self_attn.q_proj)
+        layers_to_register.append(
+            dict(target_layer=k_name, layers_sharing_scale=[q_name]),
+        )
+
         v_name = get_layer_name(model, decoder_layer.self_attn.v_proj)
         layers_to_register.append(
-            dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]),
+            dict(target_layer=v_name, layers_sharing_scale=[]),
         )
 
         o_name = get_layer_name(model, decoder_layer.self_attn.o_proj)

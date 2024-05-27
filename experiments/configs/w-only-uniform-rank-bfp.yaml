@@ -8,6 +8,7 @@ num_workers: 8
 output_dir: null
 disable_perplexity_eval: false
 disable_lm_eval: false
+overwrite_output_dir: null
 
 # calibration & perplexity
 AB_dict: null
