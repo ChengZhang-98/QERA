@@ -109,7 +109,8 @@ def _check_shape_mxint(x: torch.Tensor, block_size: int, block_axis: int):
 
 
 def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: int) -> torch.Tensor:
-    assert x.dtype in [torch.float32, torch.float16, torch.bfloat16, torch.float64]
+    ori_type = x.dtype
+    assert ori_type in [torch.float32, torch.float16, torch.bfloat16, torch.float64]
     x = x.to(torch.bfloat16)
     assert width <= 8 and width >= 2
     assert _check_shape_mxint(x, block_size, block_axis)
@@ -151,6 +152,7 @@ def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: i
     # if len(ori_shape) == n, then slice x to ori_shape by x[:ori_shape[0], :ori_shape[1], ..., :ori_shape[n-1]]
     x = x[tuple(slice(ori_shape[i]) for i in range(len(ori_shape)))]
 
+    x = x.to(ori_type)
     return x
 
 
