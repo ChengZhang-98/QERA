@@ -90,62 +90,6 @@ def pad_zeros_if_necessary(x: torch.Tensor, block_size: int, block_axis: int) ->
     return x
 
 
-@torch.no_grad()
-def extract_bf16_components(
-    x: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Extract sign, exponent, and mantissa from bfloat16 tensor.
-    - Note that subnormal numbers will be set to 0 before extraction.
-    - The leading 1 is not included in the mantissa.
-    - bfloat16 (https://en.wikipedia.org/wiki/Bfloat16_floating-point_format) format has:
-        - 1 bit for sign
-        - 8 bits for exponent, exponent bias = 127
-        - 7 bits for mantissa
-
-    :param torch.Tensor x: torch.bfloat16 tensor
-    :return tuple[torch.Tensor, torch.Tensor, torch.Tensor]: sign (torch.bool), exponent (torch.uint8), mantissa (torch.uint8), is_zero (torch.bool)
-    """
-
-    assert x.dtype == torch.bfloat16, "Only support torch.bfloat16 dtype"
-
-    sign = x < 0
-    x = x.abs()
-
-    # set subnormal numbers to 0
-    is_normal = x >= torch.finfo(torch.bfloat16).smallest_normal
-    x = torch.where(is_normal, x, torch.zeros_like(x))
-
-    is_zero = x == 0
-
-    # "re" = reinterpret
-    re_int_x = x.view(dtype=torch.int16)
-
-    # get the exponent by removing the 7-bit mantissa (>>7)
-    exponent = re_int_x.bitwise_right_shift(7).to(dtype=torch.uint8)
-    # get the mantissa by masking the 8-bit exponent
-    mantissa = re_int_x.bitwise_and(0x7F).to(dtype=torch.uint8)
-
-    return sign, exponent, mantissa, is_zero
-
-
-@torch.no_grad()
-def compose_bf16_components(sign, exponent, mantissa):
-    assert sign.dtype == torch.bool, "sign must be torch.bool"
-    assert exponent.dtype == torch.uint8, "exponent must be torch.uint8"
-    assert mantissa.dtype == torch.uint8, "mantissa must be torch.uint8"
-    # mask the implicit leading bit
-    mantissa = mantissa.bitwise_and(0x7F)
-    # "re" = reinterpret
-    # sign << 15
-    re_int_x = sign.to(dtype=torch.int16).bitwise_left_shift(15)
-    # exponent << 7
-    re_int_x = re_int_x.bitwise_or(exponent.to(dtype=torch.int16).bitwise_left_shift(7))
-    # mantissa
-    re_int_x = re_int_x.bitwise_or(mantissa.to(dtype=torch.int16))
-    re_bf_x = re_int_x.view(dtype=torch.bfloat16)
-    return re_bf_x
-
-
 def _check_shape_mxint(x: torch.Tensor, block_size: int, block_axis: int):
     assert x.ndim >= 1, "x must have at least 1 dimension"
     # assert (
@@ -164,88 +108,50 @@ def _check_shape_mxint(x: torch.Tensor, block_size: int, block_axis: int):
     return True
 
 
-@torch.no_grad()
-def quantize_bf16_to_mxint(
-    x: torch.Tensor, width: int, block_size: int, block_axis: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, tuple]]:
-    """Cast bfloat16 tensor to mxint tensor. Round mantissa by truncating or rounding to nearest even.
-
-    :param torch.Tensor x: input 1D, 2D, or 3D tensor
-    :param int width: number of bits for the shared mantissa: 1-bit sign + (width-1)-bit mantissa
-    :param int block_size: number of elements in each block
-    :param int block_axis: group the elements into blocks along the specified axis
-    :return tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, tuple]]: sign (torch.bool), exponent (torch.uint8), mantissa (torch.uint8), reshape_kwargs
-    """
-
-    assert x.dtype == torch.bfloat16, "Only support torch.bfloat16 dtype"
-    assert width <= 8, "width must be <= 8"
+def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: int) -> torch.Tensor:
+    assert x.dtype in [torch.float32, torch.float16, torch.bfloat16, torch.float64]
+    x = x.to(torch.bfloat16)
+    assert width <= 8 and width >= 2
     assert _check_shape_mxint(x, block_size, block_axis)
 
-    # quantize
-    # group the elements into blocks along the specified axis
     ori_shape = x.size()
-    x = pad_zeros_if_necessary(x, block_size, block_axis)  # padded x
-    x, view_args, permute_args = group_tensor(x, block_size, block_axis)  # [num_blocks, block_size]
+    # group the elements into blocks along the specified axis
+    x = pad_zeros_if_necessary(x, block_size, block_axis)
+    x, view_args, permute_args = group_tensor(x, block_size, block_axis)
 
-    # extract sign, exponent, mantissa for each element
-    sign, exponent, mantissa, is_zero = extract_bf16_components(x)
+    # sign = 1 if x >= 0 else -1
+    sign = torch.where(x < 0, torch.tensor(-1.0, dtype=torch.bfloat16), torch.tensor(1.0, dtype=torch.bfloat16))
 
-    # find max exponent in each block
-    group_max_exp = exponent.max(dim=1, keepdim=True).values  # [num_blocks, 1]
+    # set subnormal numbers to 0
+    x = x.abs()
+    is_normal = x >= torch.finfo(torch.bfloat16).smallest_normal
+    x = torch.where(is_normal, x, 0.0)
 
-    # shift the mantissa to the left by (group_max_exp - exponent)
-    mantissa_shift = group_max_exp - exponent
-    set_leading_1 = (mantissa_shift != 0) & (~is_zero)
-    # before that, set the leading 1 for (the mantissa whose exponent is not the max) to 1
-    mantissa = torch.where(set_leading_1, mantissa | 0x80, mantissa)
-    # *: shift right for truncating rounding
-    mantissa = mantissa.bitwise_right_shift(mantissa_shift)
-    # mask the implicit leading bit since mantissa should have 7 bit
-    truncation_mask = (255 << (8 - width)) & 0x7F
-    mantissa = mantissa.bitwise_left_shift(mantissa_shift).bitwise_and(truncation_mask)
+    # extract exponent
+    exponent = (x.view(dtype=torch.int16) >> 7) & 0xFF
 
-    reshape_kwargs = {
-        "view_args": view_args,
-        "permute_args": permute_args,
-        "orig_shape": ori_shape,
-    }
+    # use the max exponent as the shared scale
+    group_max_exp = exponent.max(dim=1, keepdim=True).values
+    group_max_exp = (group_max_exp << 7).view(torch.bfloat16)
 
-    return sign, exponent, mantissa, reshape_kwargs
+    # elements after the shared scale is extracted
+    x = x / group_max_exp
 
+    # round the elements to the nearest fixed-point number
+    # note that the element of the MXINT has 1 sign bit, and (width - 1) bits for the mantissa
+    # the radix point is after the first bit of the mantissa.
+    # for example, the mantissa of MXINT8 follows the form:  _ . _ _ _ _ _ _ , i.e., 1-bit before the radix point, 6-bit after the radix point
+    x = x * (2 ** (width - 2))
+    x = x.round().clamp(0, 2 ** (width - 1) - 1)
 
-@torch.no_grad()
-def dequantize_mxint_to_bf16(sign, exponent, mantissa, reshape_kwargs):
-    """Compose mxint components to bfloat16 tensor."""
-    view_args = reshape_kwargs["view_args"]
-    permute_args = reshape_kwargs["permute_args"]
-    ori_shape = reshape_kwargs["orig_shape"]
-    x = compose_bf16_components(sign, exponent, mantissa)
+    x = sign * x * group_max_exp / (2 ** (width - 2))
+
+    # restore x to the original shape
     x = x.view(view_args).permute(permute_args)
-
     # if len(ori_shape) == n, then slice x to ori_shape by x[:ori_shape[0], :ori_shape[1], ..., :ori_shape[n-1]]
     x = x[tuple(slice(ori_shape[i]) for i in range(len(ori_shape)))]
+
     return x
-
-
-@torch.no_grad()
-def emulated_quantizer_bf16_to_mxint(x: torch.Tensor, width: int, block_size: int, block_axis: int) -> torch.Tensor:
-    """Emulated quantizer from bfloat16 to mxint8.
-
-    :param torch.Tensor x: torch.bfloat16 tensor
-    :param int block_size: number of elements in each block
-    :param int block_axis: group the elements into blocks along the specified axis
-    :return torch.Tensor: emulated mxint tensor with the same shape as x, dtype=torch.bfloat16
-    """
-    sign, exponent, mantissa, reshape_kwargs = quantize_bf16_to_mxint(x, width, block_size, block_axis)
-    x = dequantize_mxint_to_bf16(sign, exponent, mantissa, reshape_kwargs)
-    return x
-
-
-@torch.no_grad()
-def emulated_mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: int) -> torch.Tensor:
-    assert x.dtype in [torch.bfloat16, torch.float16, torch.float32, torch.float64]
-    x = x.to(dtype=torch.bfloat16)
-    return emulated_quantizer_bf16_to_mxint(x, width, block_size, block_axis)
 
 
 class MXINTQuantize(torch.autograd.Function):
@@ -257,7 +163,7 @@ class MXINTQuantize(torch.autograd.Function):
         block_size: int,
         block_axis: int,
     ):
-        return emulated_mxint_quantizer(x, width, block_size, block_axis)
+        return _mxint_quantizer(x, width, block_size, block_axis)
 
     @staticmethod
     def backward(ctx, grad_output):

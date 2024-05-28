@@ -1,7 +1,7 @@
 from .block_fp import block_fp_quantizer
 from .integer import int_quantizer
 from .minifloat import minifloat_ieee_quantizer
-from .passthrough import bypass_quantizer
+from .bypass import bypass_quantizer
 from .mxint import mxint_quantizer
 
 
