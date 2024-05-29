@@ -823,12 +823,12 @@ def pipeline_loqer_chunked():
     assert not (len(missing_chunks) > 0 and chunk_id is None), f"Missing chunks: {missing_chunks}"
 
     if len(missing_chunks) > 0:
-        # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx"]
+        # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
         if disable_loqer:
             raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
         else:
-            if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed"]:
-                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed']")
+            if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity"]:
+                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity']")
 
         # sqrtm_implementation
         if loqer_scaling_mode in ["rxx", "mixed"]:

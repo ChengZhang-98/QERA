@@ -111,7 +111,7 @@ def _check_shape_mxint(x: torch.Tensor, block_size: int, block_axis: int):
 def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: int) -> torch.Tensor:
     ori_type = x.dtype
     assert ori_type in [torch.float32, torch.float16, torch.bfloat16, torch.float64]
-    x = x.to(torch.bfloat16)
+    x = x.to(torch.float32)
     assert width <= 8 and width >= 2
     assert _check_shape_mxint(x, block_size, block_axis)
 
@@ -121,19 +121,25 @@ def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: i
     x, view_args, permute_args = group_tensor(x, block_size, block_axis)
 
     # sign = 1 if x >= 0 else -1
-    sign = torch.where(x < 0, torch.tensor(-1.0, dtype=torch.bfloat16), torch.tensor(1.0, dtype=torch.bfloat16))
+    sign = torch.where(
+        x < 0,
+        torch.tensor(-1.0, dtype=torch.float32, device=x.device),
+        torch.tensor(1.0, dtype=torch.float32, device=x.device),
+    )
 
     # set subnormal numbers to 0
     x = x.abs()
     is_normal = x >= torch.finfo(torch.bfloat16).smallest_normal
     x = torch.where(is_normal, x, 0.0)
 
+    is_zeros = torch.all(x == 0.0, dim=1, keepdim=True)
     # extract exponent
-    exponent = (x.view(dtype=torch.int16) >> 7) & 0xFF
+    exponent = (x.view(dtype=torch.int32) >> 23) & 0xFF
 
     # use the max exponent as the shared scale
     group_max_exp = exponent.max(dim=1, keepdim=True).values
-    group_max_exp = (group_max_exp << 7).view(torch.bfloat16)
+    group_max_exp = torch.where(is_zeros, 1, group_max_exp)
+    group_max_exp = (group_max_exp << 23).view(torch.float32)
 
     # elements after the shared scale is extracted
     x = x / group_max_exp
