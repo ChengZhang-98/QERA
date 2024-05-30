@@ -9,6 +9,8 @@ toml
 tabulate
 ipdb
 pudb
+nvitop
+sentencepiece
 # lm-eval-harness
 einops
 jsonlines
@@ -25,4 +27,3 @@ scikit-learn>=0.24.1
 sqlitedict
 tqdm-multiprocess
 zstandard
-nvitop
