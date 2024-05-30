@@ -12,8 +12,6 @@ import torch
 from torch.utils.data import DataLoader
 import transformers
 from accelerate import dispatch_model, init_empty_weights
-from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
-from auto_gptq import exllama_set_max_input_length
 import pandas as pd
 
 from .statistic_profiler import register_scale_hooks, share_scales
@@ -491,6 +489,8 @@ def pipeline_fp16():
 
 
 def pipeline_q_baseline():
+    from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
+    from auto_gptq import exllama_set_max_input_length
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
     parser.add_argument("--load-in-4bit", dest="load_in_4bit", action="store_true", help="Load in 4-bit model")
@@ -1097,17 +1097,6 @@ def merge_chunked_results():
     output_dir = Path(args.output_dir)
     approx_error_dir = output_dir.joinpath("approximation_error")
     assert approx_error_dir.is_dir(), f"Directory {approx_error_dir} does not exist."
-
-    # df = None
-    # for file in approx_error_dir.iterdir():
-    #     if not file.is_file() or not file.name.endswith(".csv"):
-    #         continue
-
-    #     chunk_df = pd.read_csv(file)
-    #     if df is None:
-    #         df = chunk_df
-    #     else:
-    #         df = pd.concat([df, chunk_df], ignore_index=True)
 
     df = _merge_chunked_approximation_error(approx_error_dir)
 

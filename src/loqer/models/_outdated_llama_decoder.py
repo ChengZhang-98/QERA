@@ -1,39 +1,72 @@
-import logging
-from typing import Optional, Tuple
+# coding=utf-8
+# Code copied from HuggingFace's transformers library
+#
+# Copyright 2022 EleutherAI and the HuggingFace Inc. team. All rights reserved.
+#
+# This code is based on EleutherAI's GPT-NeoX library and the GPT-NeoX
+# and OPT implementations in this library. It has been modified from its
+# original forms to accommodate minor architectural differences compared
+# to GPT-NeoX and OPT used by the Meta AI team that trained the model.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+""" PyTorch LLaMA model."""
 import math
+import warnings
+from typing import Optional, Tuple
+import logging
 from copy import deepcopy
 
 import torch
+import torch.nn.functional as F
+import torch.utils.checkpoint
 from torch import nn
+
+from transformers.activations import ACT2FN
+from transformers.cache_utils import Cache
+from transformers.utils import (
+    is_flash_attn_2_available,
+    logging,
+)
+from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import (
+    is_flash_attn_2_available,
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
     LlamaLinearScalingRotaryEmbedding,
     LlamaDynamicNTKScalingRotaryEmbedding,
-    apply_rotary_pos_emb,
-    ACT2FN,
-    LlamaConfig,
-    Cache,
     repeat_kv,
+    apply_rotary_pos_emb,
     LlamaForCausalLM,
+    LlamaForSequenceClassification,
     LlamaDecoderLayer,
 )
-
 from ..quantize import get_quantized_layer_cls, get_quantized_func
 from ..utils import find_matched_pattern, get_layer_name
 
-logger = logging.getLogger(__name__)
+logger = logging.get_logger(__name__)
+
+
+if is_flash_attn_2_available():
+    from flash_attn import flash_attn_func, flash_attn_varlen_func  # noqa
+    from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
 
 
 class LlamaQuantizedMLP(nn.Module):
-    def __init__(self, config: LlamaConfig, loqer_config: dict):
+    def __init__(self, config, loqer_config):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        # self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        # self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        # self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
         # fmt: off
         self.gate_proj = get_quantized_layer_cls("linear", q_config=loqer_config["gate_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=loqer_config["gate_proj"])
         self.up_proj = get_quantized_layer_cls("linear", q_config=loqer_config["up_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=loqer_config["up_proj"])
@@ -43,7 +76,25 @@ class LlamaQuantizedMLP(nn.Module):
 
     def forward(self, x):
         if self.config.pretraining_tp > 1:
-            raise NotImplementedError("Pretraining with TP > 1 is not supported yet.")
+            slice = self.intermediate_size // self.config.pretraining_tp
+            gate_proj_slices = self.gate_proj.weight.split(slice, dim=0)
+            up_proj_slices = self.up_proj.weight.split(slice, dim=0)
+            down_proj_slices = self.down_proj.weight.split(slice, dim=1)
+
+            gate_proj = torch.cat(
+                [F.linear(x, gate_proj_slices[i]) for i in range(self.config.pretraining_tp)],
+                dim=-1,
+            )
+            up_proj = torch.cat(
+                [F.linear(x, up_proj_slices[i]) for i in range(self.config.pretraining_tp)],
+                dim=-1,
+            )
+
+            intermediate_states = (self.act_fn(gate_proj) * up_proj).split(slice, dim=2)
+            down_proj = [
+                F.linear(intermediate_states[i], down_proj_slices[i]) for i in range(self.config.pretraining_tp)
+            ]
+            down_proj = sum(down_proj)
         else:
             down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
 
@@ -53,10 +104,16 @@ class LlamaQuantizedMLP(nn.Module):
 class LlamaQuantizedAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig, layer_idx: Optional[int], loqer_config: dict):
+    def __init__(self, config: LlamaConfig, layer_idx: int, loqer_config: dict):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        # if layer_idx is None:
+        #     logger.warning_once(
+        #         f"Instantiating {self.__class__.__name__} without passing a `layer_idx` is not recommended and will "
+        #         "lead to errors during the forward call if caching is used. Please make sure to provide a `layer_idx` "
+        #         "when creating this class."
+        #     )
 
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
@@ -74,10 +131,6 @@ class LlamaQuantizedAttention(nn.Module):
                 f" and `num_heads`: {self.num_heads})."
             )
 
-        # self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias)
-        # self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        # self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
-        # self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attention_bias)
         # fmt: off
         self.q_proj = get_quantized_layer_cls("linear", q_config=loqer_config["q_proj"])(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias, q_config=loqer_config["q_proj"])
         self.k_proj = get_quantized_layer_cls("linear", q_config=loqer_config["k_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias, q_config=loqer_config["k_proj"])
@@ -85,7 +138,6 @@ class LlamaQuantizedAttention(nn.Module):
         self.o_proj = get_quantized_layer_cls("linear", q_config=loqer_config["o_proj"])(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias, q_config=loqer_config["o_proj"])
         self.loqer_config = loqer_config
         # fmt: on
-
         self._init_rope()
 
     def _init_rope(self):
@@ -115,6 +167,9 @@ class LlamaQuantizedAttention(nn.Module):
             else:
                 raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
+    def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -123,13 +178,33 @@ class LlamaQuantizedAttention(nn.Module):
         past_key_value: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
-        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if "padding_mask" in kwargs:
+            warnings.warn(
+                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
+            )
+
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
-            raise NotImplementedError("Pretraining with TP > 1 is not supported yet.")
+            # *: tensor parallelism, disable this for quantization
+            raise ValueError("Quantization is not supported for tensor parallelism")
+            # key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.config.pretraining_tp
+            # query_slices = self.q_proj.weight.split(
+            #     (self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0
+            # )
+            # key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
+            # value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
+
+            # query_states = [F.linear(hidden_states, query_slices[i]) for i in range(self.config.pretraining_tp)]
+            # query_states = torch.cat(query_states, dim=-1)
+
+            # key_states = [F.linear(hidden_states, key_slices[i]) for i in range(self.config.pretraining_tp)]
+            # key_states = torch.cat(key_states, dim=-1)
+
+            # value_states = [F.linear(hidden_states, value_slices[i]) for i in range(self.config.pretraining_tp)]
+            # value_states = torch.cat(value_states, dim=-1)
 
         else:
             query_states = self.q_proj(hidden_states)
@@ -140,40 +215,54 @@ class LlamaQuantizedAttention(nn.Module):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        past_key_value = getattr(self, "past_key_value", past_key_value)
-        cos, sin = self.rotary_emb(value_states, position_ids)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # *: matmul
+        # *: matmul of QK^T
         # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-        # fmt: off
         query_states = query_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
-        key_states = key_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
+        key_states = key_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
         attn_weights = get_quantized_func("matmul", q_config=self.loqer_config["matmul_0"])(
             query_states, key_states.transpose(1, 2), q_config=self.loqer_config["matmul_0"]
         ) / math.sqrt(self.head_dim)
-        attn_weights = attn_weights.reshape(bsz, self.num_heads, q_len, q_len)
-        # fmt: on
+        attn_weights = attn_weights.reshape(bsz, self.num_heads, q_len, kv_seq_len)
 
-        if attention_mask is not None:  # no matter the length, we just slice it
-            causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-            attn_weights = attn_weights + causal_mask
+        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+            raise ValueError(
+                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                f" {attn_weights.size()}"
+            )
+
+        if attention_mask is not None:
+            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                raise ValueError(
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                )
+            attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-        # *: matmul
+        # *: matmul of attention weights and V
         # attn_output = torch.matmul(attn_weights, value_states)
-        attn_weights = attn_weights.reshape(bsz * self.num_heads, q_len, q_len)
-        value_states = value_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
+        attn_weights = attn_weights.reshape(bsz * self.num_heads, q_len, kv_seq_len)
+        value_states = value_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
         attn_output = get_quantized_func("matmul", q_config=self.loqer_config["matmul_0"])(
             attn_weights, value_states, q_config=self.loqer_config["matmul_1"]
         )
@@ -190,7 +279,11 @@ class LlamaQuantizedAttention(nn.Module):
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
         if self.config.pretraining_tp > 1:
-            raise NotImplementedError("Pretraining with TP > 1 is not supported yet.")
+            # *: tensor parallelism, disable this for quantization
+            raise ValueError("Quantization is not supported for tensor parallelism")
+            # attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
+            # o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
+            # attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
         else:
             attn_output = self.o_proj(attn_output)
 
@@ -200,8 +293,10 @@ class LlamaQuantizedAttention(nn.Module):
         return attn_output, attn_weights, past_key_value
 
 
-LLAMA_ATTENTION_CLASSES = {
+LLAMA_QUANTIZED_ATTENTION_CLASSES = {
     "eager": LlamaQuantizedAttention,
+    "flash_attention_2": None,
+    "sdpa": None,
 }
 
 
@@ -210,12 +305,20 @@ class LlamaQuantizedDecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        assert config._attn_implementation == "eager", "Only eager attention is supported."
-        self.self_attn = LLAMA_ATTENTION_CLASSES[config._attn_implementation](
-            config=config, layer_idx=layer_idx, loqer_config=loqer_config["self_attn"]
+        if config._attn_implementation in ["flash_attention_2", "sdpa"]:
+            raise ValueError(
+                f"Attention implementation {config._attn_implementation} is not supported for LlamaQuantizedDecoderLayer"
+            )
+        self.self_attn = LLAMA_QUANTIZED_ATTENTION_CLASSES[config._attn_implementation](
+            config=config,
+            layer_idx=layer_idx,
+            loqer_config=loqer_config["self_attn"],
         )
 
-        self.mlp = LlamaQuantizedMLP(config, loqer_config=loqer_config["mlp"])
+        self.mlp = LlamaQuantizedMLP(
+            config,
+            loqer_config=loqer_config["mlp"],
+        )
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
@@ -227,7 +330,6 @@ class LlamaQuantizedDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
@@ -245,7 +347,7 @@ class LlamaQuantizedDecoderLayer(nn.Module):
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
         if "padding_mask" in kwargs:
-            logger.warning(
+            warnings.warn(
                 "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
             )
 
@@ -261,7 +363,6 @@ class LlamaQuantizedDecoderLayer(nn.Module):
             past_key_value=past_key_value,
             output_attentions=output_attentions,
             use_cache=use_cache,
-            cache_position=cache_position,
             **kwargs,
         )
         hidden_states = residual + hidden_states
@@ -314,7 +415,10 @@ def build_loqer_config_llama(model: LlamaForCausalLM, loqer_config: dict):
     return parsed_config
 
 
-def quantize_llama_model(model: LlamaForCausalLM, loqer_config: dict):
+def quantize_llama_model(
+    model: LlamaForCausalLM | LlamaForSequenceClassification,
+    loqer_config: dict,
+):
     loqer_config = build_loqer_config_llama(model, loqer_config)
 
     for layer_id, ori_decoder_layer in enumerate(model.model.layers):
