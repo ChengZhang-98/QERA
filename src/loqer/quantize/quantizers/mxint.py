@@ -120,12 +120,7 @@ def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: i
     x = pad_zeros_if_necessary(x, block_size, block_axis)
     x, view_args, permute_args = group_tensor(x, block_size, block_axis)
 
-    # sign = 1 if x >= 0 else -1
-    sign = torch.where(
-        x < 0,
-        torch.tensor(-1.0, dtype=torch.float32, device=x.device),
-        torch.tensor(1.0, dtype=torch.float32, device=x.device),
-    )
+    sign = x < 0
 
     # set subnormal numbers to 0
     x = x.abs()
@@ -151,7 +146,8 @@ def _mxint_quantizer(x: torch.Tensor, width: int, block_size: int, block_axis: i
     x = x * (2 ** (width - 2))
     x = x.round().clamp(0, 2 ** (width - 1) - 1)
 
-    x = sign * x * group_max_exp / (2 ** (width - 2))
+    x = x * group_max_exp / (2 ** (width - 2))
+    x = torch.where(sign, -x, x)
 
     # restore x to the original shape
     x = x.view(view_args).permute(permute_args)
