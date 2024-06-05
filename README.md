@@ -1,5 +1,8 @@
 # Closed-Form Solution to Activation-Informed Weight Quantization Error Approximation
 
+![](/docs/big-little-llama-small.png)
+
+
 ## Env Setup
 
 ```bash
@@ -40,6 +43,6 @@ conda run -n loqer python -m pip install -r requirements.txt
 
 ## Reference
 
-- LQER: Low-Rank Quantization Error Reconstruction for LLMs: [link](https://arxiv.org/abs/2402.02446)
-- Closed-form solution to the scale matrix $S$: [link](https://typst.app/project/rQcqVZNgJGJz2LLuOrZx6y), ⚠️ **Not yet published. Please do not distribute.** ⚠️
+- [LQER: Low-Rank Quantization Error Reconstruction for LLMs](https://arxiv.org/abs/2402.02446)
+- [Closed-form solution to the scale matrix $S$](/docs/LQER-proof.pdf). ⚠️ **Not yet published. Please do not distribute** ⚠️
 
