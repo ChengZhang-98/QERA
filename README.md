@@ -28,7 +28,7 @@ conda run -n loqer python -m pip install -r requirements.txt
 
     "scale = idenity matrix" means that we just apply SVD to the quantization error: $\mathrm{SVD}(W - W_q)$.
 
-3. MXINT weight, scale = activation induced diagonal matrix, which is derived by assuming $E\{x_i, x_j\} = 0$ for $i\neq j$.
+3. MXINT weight, scale = activation induced diagonal matrix, which is derived by assuming $E[x_i x_j] = 0$ for $i\neq j$.
 
     ```bash
     python main.py ./experiments/configs/w-s-activation-rank.yaml --loqer-scaling-mode diag --disable-lm-eval
