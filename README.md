@@ -12,6 +12,12 @@ conda run -n loqer python -m pip install -r requirements.txt
 
 ## Usage
 
+Add `LoQER/src` to PYTHONPATH.
+
+```bash
+export PYTHONPATH=${PYTHONPATH}:$(pwd)/src
+```
+
 1. MXINT4 weight quantization only, no loqer
 
     ```bash
