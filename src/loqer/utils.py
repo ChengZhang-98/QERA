@@ -73,15 +73,26 @@ def setattr_recursive(obj, attr, value):
         layer = attr.split(".")
         setattr_recursive(getattr(obj, layer[0]), ".".join(layer[1:]), value)
 
-
+def get_available_device(threshold=0.5):
+    max_memory={}
+    for i in range(torch.cuda.device_count()):
+        if torch.cuda.mem_get_info(i)[0] / torch.cuda.mem_get_info(i)[1] > threshold:
+            max_memory[i]=torch.cuda.mem_get_info(i)[0]
+        else:
+            max_memory[i]=0
+    return max_memory  
+            
+    
 def create_device_map(model, device_map) -> dict[str, int]:
     if device_map == "auto":
+        max_memory = get_available_device()
         device_map = infer_auto_device_map(
             model,
             no_split_module_classes=model._no_split_modules,
+            max_memory=max_memory,
         )
     elif device_map == "auto-balanced":
-        max_memory = {i: torch.cuda.mem_get_info(i)[0] // 2 for i in range(torch.cuda.device_count())}
+        max_memory = get_available_device()
         device_map = infer_auto_device_map(
             model,
             no_split_module_classes=model._no_split_modules,

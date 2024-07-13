@@ -93,7 +93,7 @@ def pipeline_loqer():
         type=str,
         help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
         default=None,
-        choices=["diagonal", "diag", "rxx", "identity", "mixed"],  # "diag" is alias of "diagonal"
+        choices=["diagonal", "diag", "rxx", "identity", "lqer", "mixed"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
         "--loqer-sqrtm-implementation",
