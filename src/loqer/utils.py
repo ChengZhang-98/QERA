@@ -8,8 +8,7 @@ from nvitop import CudaDevice, parse_cuda_visible_devices
 
 
 def get_all_device_mem_info() -> dict[int, dict[str, int]]:
-    visible_devices = parse_cuda_visible_devices(os.getenv("CUDA_VISIBLE_DEVICES", None))
-    visible_devices = [CudaDevice(i) for i in visible_devices]
+    visible_devices = CudaDevice.from_cuda_visible_devices()
     memory_info = {}
     for device in visible_devices:
         mem_info_i = device.memory_info()
