@@ -27,3 +27,4 @@ scikit-learn>=0.24.1
 sqlitedict
 tqdm-multiprocess
 zstandard
+bitsandbytes==0.43.2
