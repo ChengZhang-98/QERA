@@ -93,7 +93,7 @@ def pipeline_loqer():
         type=str,
         help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
         default=None,
-        choices=["diagonal", "diag", "rxx", "identity", "mixed"],  # "diag" is alias of "diagonal"
+        choices=["diagonal", "diag", "rxx", "identity", "lqer", "mixed"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
         "--loqer-sqrtm-implementation",
@@ -185,9 +185,9 @@ def pipeline_loqer():
             raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
     # Load model and tokenizer
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, token="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")
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager",token="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"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
