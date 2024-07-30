@@ -743,9 +743,9 @@ def pipeline_loqer_chunked():
         "--loqer-scaling-mode",
         dest="loqer_scaling_mode",
         type=str,
-        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
+        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed', 'lqer'].",
         default=None,
-        choices=["diagonal", "diag", "rxx", "identity", "mixed"],  # "diag" is alias of "diagonal"
+        choices=["diagonal", "diag", "rxx", "identity", "mixed", "lqer"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
         "--loqer-sqrtm-implementation",
@@ -827,8 +827,8 @@ def pipeline_loqer_chunked():
         if disable_loqer:
             raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
         else:
-            if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity"]:
-                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity']")
+            if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity", "lqer"]:
+                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']")
 
         # sqrtm_implementation
         if loqer_scaling_mode in ["rxx", "mixed"]:
