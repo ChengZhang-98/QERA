@@ -185,9 +185,9 @@ def pipeline_loqer():
             raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
     # Load model and tokenizer
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name, token="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")
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager",token="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"
+        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
