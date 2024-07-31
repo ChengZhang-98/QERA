@@ -656,8 +656,6 @@ def loftQ_fine_tuning(args, AB_dict):
             lora_dropout=0.1,
             target_modules=target_modules,
             init_lora_weights=True,
-            # init_lora_weights="loftq",
-            # loftq_config=loftq_config,
         )
         model = get_peft_model(model, lora_config)
         if AB_dict is not None:
@@ -665,8 +663,6 @@ def loftQ_fine_tuning(args, AB_dict):
         else:
             logger.warning("AB_dict is None. The model will use the LoftQ initialization.")
             replace_lora_weights_loftq(model)
-
-        # model = PeftModel.from_pretrained(model, args.model_name_or_path, is_trainable=True)
     else:
         model = PeftModel.from_pretrained(model, args.adapter_name_or_path, is_trainable=True)
     model.print_trainable_parameters()
@@ -1013,7 +1009,8 @@ def loftQ_fine_tuning(args, AB_dict):
                     folder_path=args.output_dir,
                     commit_message="End of training",
                 )
-
+    # NOTE: Not sure how we should calculate the accurray. Porting the model out in case we need to evaluate perplexity in the outter function. 
+    return model
 
 PATTERN_NUMBER = re.compile(r"-?\d+\.?\d*")
 

@@ -56,10 +56,9 @@ loqer_config:
     x_quantizer:
       name: bypass
     w_quantizer:
-      name: mxint
-      width: 4
-      block_size: 32
-      block_axis: -1
+      name: normalfloat
+      num_bits: 4
+      block_size: 64
     b_quantizer:
       name: bypass
 
@@ -74,24 +73,28 @@ loqer_config:
 fine_tuning: true
 fine_tuning_config:
   model_name_or_path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
-  # output_dir: exp_results/gsm8k/TinyLlama/TinyLlama-1.1B-Chat-v1.0/lr1e-4
-  learning_rate: 1.0e-4
-  weight_decay: 0.1
-  lr_scheduler_type: cosine
-  num_warmup_steps: 100
-  seed: 202
+  rank: 32 # rank for the lora adapter and this should be the same as the rank for the loqer
+  # dataset
   dataset_name: gsm8k
   dataset_config_name: main
   pad_to_max_length: true
   max_source_length: 128
   max_target_length: 256
+  with_tracking: true
+  report_to: tensorboard
+
+  ########################################
+  # LoftQ Fine-tuning Config (shouldn't be changed)
+  learning_rate: 1.0e-4
+  weight_decay: 0.1
+  lr_scheduler_type: cosine
+  num_warmup_steps: 100
+  seed: 202
   num_train_epochs: 5
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4
-  with_tracking: true
-  report_to: tensorboard
-  rank: 32
+  ########################################
 
 
 

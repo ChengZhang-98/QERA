@@ -981,10 +981,12 @@ def pipeline_loqer_chunked():
                 
         # We don't need to use the loqer_quantized model here. The training script will load the model from the model_name_or_path
         if fine_tuning:
-            # fine-tuning
+            # fine-tuning the model
+            if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat':
+                raise ValueError("Fine-tuning only supports normalfloat quantizer.")
             logger.info("🚀 Fine-tuning...")
             fine_tuning_args = Namespace(**args)
-            loftQ_fine_tuning(fine_tuning_args, AB_dict=AB_dict)
+            model=loftQ_fine_tuning(fine_tuning_args, AB_dict=AB_dict)
         else:
             # attach A & B
             layers_to_approximate = find_layers_to_approximate(model)
