@@ -1,7 +1,7 @@
 import logging
 import re
 import yaml
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from pprint import pformat
 import math
@@ -14,6 +14,7 @@ import transformers
 from accelerate import dispatch_model, init_empty_weights
 import pandas as pd
 
+from .fine_tuning import loftQ_parse_args, loftQ_fine_tuning
 from .statistic_profiler import register_scale_hooks, share_scales
 from .datasets import get_data_module
 from .evaluate import evaluate_perplexity, evaluate_harness_downstream
@@ -690,6 +691,8 @@ def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag
 
 def pipeline_loqer_chunked():
     parser = ArgumentParser()
+    fine_tuning_group = parser.add_argument_group("Fine_Tuning Configuration")
+    loftQ_parse_args(fine_tuning_group, use_existing_parser=True)
     parser.add_argument("config", type=str, help="Path to the configuration file")
     parser.add_argument("--model-name", dest="model_name", type=str, help="Model name", default=None)
     parser.add_argument("--loqer-dtype", dest="loqer_dtype", type=str, help="Loqer data type", default=None)
@@ -780,6 +783,15 @@ def pipeline_loqer_chunked():
             config[entry] = value
             override_args[entry] = value
 
+    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments... 
+    # (because there are many default values in the command line arguments)
+    if "fine_tuning_config" in config:
+        fine_tuning_config = config.pop("fine_tuning_config")
+        config.update(fine_tuning_config)
+        args.update(fine_tuning_config)
+        for entry, value in fine_tuning_config.items():
+            override_args.pop(entry, None)
+
     logger.info(f"Configuration: \n{pformat(config, indent=4)}")
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
 
@@ -810,6 +822,9 @@ def pipeline_loqer_chunked():
 
     layers_per_chunk = config["layers_per_chunk"]
     chunk_id = config["chunk_id"]
+    # Lora fine-tuning
+    fine_tuning = config.get("fine_tuning", False)
+
 
     # assert chunk_id is not None
     assert output_dir is not None
@@ -955,7 +970,6 @@ def pipeline_loqer_chunked():
         logger.info(f"Device map: {device_map}")
         model = dispatch_model(model, device_map)
         data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-
         quantize_model(model, loqer_config)
 
     if len(missing_chunks) == 0:
@@ -964,10 +978,17 @@ def pipeline_loqer_chunked():
         AB_dict_chunks = list(filter(lambda x: x.is_file() and x.name.endswith(".pt"), AB_dict_dir.iterdir()))
         for chunk in tqdm(AB_dict_chunks, desc="Loading chunks"):
             AB_dict.update(torch.load(chunk))
-
-        # attach A & B
-        layers_to_approximate = find_layers_to_approximate(model)
-        attach_AB(model, layers_to_approximate, AB_dict)
+                
+        # We don't need to use the loqer_quantized model here. The training script will load the model from the model_name_or_path
+        if fine_tuning:
+            # fine-tuning
+            logger.info("🚀 Fine-tuning...")
+            fine_tuning_args = Namespace(**args)
+            loftQ_fine_tuning(fine_tuning_args, AB_dict=AB_dict)
+        else:
+            # attach A & B
+            layers_to_approximate = find_layers_to_approximate(model)
+            attach_AB(model, layers_to_approximate, AB_dict)
 
         # evaluate
         if not disable_perplexity_eval:

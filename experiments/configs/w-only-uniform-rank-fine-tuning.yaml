@@ -1,0 +1,97 @@
+model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+# Note that the dtype for statistic profiling is hard-coded float32,
+# since the SVD of float16 is not supported by pytorch
+loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
+eval_dtype: bfloat16 # the precision for evaluation
+device_map: auto-balanced
+num_workers: 8
+output_dir: null
+disable_perplexity_eval: false
+disable_lm_eval: false
+
+# chunked
+layers_per_chunk: 8
+chunk_id: null
+
+# calibration & perplexity
+calibration_set: "slim_pajama_6b"
+num_calibration_samples: 256
+perplexity_eval_batch_size: 4
+perplexity_eval_set: "wikitext2"
+perplexity_max_seq_length: 2048
+# lm-eval-harness
+lm_eval_tasks:
+  [
+    "arc_easy",
+    "lambada_openai",
+    "piqa",
+    "winogrande",
+    "arc_challenge",
+    "boolq",
+    "openbookqa",
+  ]
+lm_eval_batch_size: 4
+lm_eval_num_fewshot: 0
+
+# LoQER
+disable_loqer: false # if true, quantization only without A & B
+loqer_scaling_mode: rxx # "rxx" or "diagonal"
+loqer_sqrtm_implementation: blocked # "blocked" or "iterative"
+loqer_sqrtm_num_iters: 100
+loqer_scaling_mode_map: null
+loqer_config:
+  # llama/mistral
+  'model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj': default-1
+  'model\.layers\.[0-9]+\.mlp\.(gate|down|up)_proj': default-1
+  'model\.layers\.[0-9]+\.self_attn\.(matmul_0|matmul_1)': default-matmul
+  # opt
+  'model\.decoder\.layers\.[0-9]+\.self_attn\.(k|q|v|out)_proj': default-1
+  'model\.decoder\.layers\.[0-9]+\.(fc1|fc2)': default-1
+  'model\.decoder\.layers\.[0-9]+\.self_attn\.(bmm_0|bmm_1)': default-matmul
+
+  default-1:
+    rank: 32
+    name: loqer
+    is_ptq: true
+    x_quantizer:
+      name: bypass
+    w_quantizer:
+      name: mxint
+      width: 4
+      block_size: 32
+      block_axis: -1
+    b_quantizer:
+      name: bypass
+
+  default-matmul:
+    name: flexible
+    x_quantizer:
+      name: bypass
+    w_quantizer:
+      name: bypass
+
+# fine-tuning config
+fine_tuning: true
+fine_tuning_config:
+  model_name_or_path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  # output_dir: exp_results/gsm8k/TinyLlama/TinyLlama-1.1B-Chat-v1.0/lr1e-4
+  learning_rate: 1.0e-4
+  weight_decay: 0.1
+  lr_scheduler_type: cosine
+  num_warmup_steps: 100
+  seed: 202
+  dataset_name: gsm8k
+  dataset_config_name: main
+  pad_to_max_length: true
+  max_source_length: 128
+  max_target_length: 256
+  num_train_epochs: 5
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 4
+  gradient_accumulation_steps: 4
+  with_tracking: true
+  report_to: tensorboard
+  rank: 32
+
+
+
