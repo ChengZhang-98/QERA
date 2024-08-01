@@ -27,6 +27,7 @@ import torch
 import transformers
 from accelerate import Accelerator, DistributedType
 from accelerate.logging import get_logger
+
 from accelerate.utils import set_seed
 from datasets import load_dataset
 from huggingface_hub import HfApi
@@ -914,7 +915,11 @@ def loftQ_fine_tuning(args, AB_dict):
                     accelerator.save_state(output_dir)
             if completed_steps >= args.max_train_steps:
                 break
-
+        
+        if args.dataset_name != "GSM8K":
+            return model
+        
+        # GSM8K Accuracy Evaluation
         model.eval()
         gen_kwargs = {
             "max_new_tokens": args.max_target_length,
@@ -1009,8 +1014,6 @@ def loftQ_fine_tuning(args, AB_dict):
                     folder_path=args.output_dir,
                     commit_message="End of training",
                 )
-    # NOTE: Not sure how we should calculate the accurray. Porting the model out in case we need to evaluate perplexity in the outter function. 
-    return model
 
 PATTERN_NUMBER = re.compile(r"-?\d+\.?\d*")
 
