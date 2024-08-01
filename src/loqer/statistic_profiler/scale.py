@@ -266,15 +266,16 @@ class ScaleHookFactoryRxx:
 
 class ScaleHookFactoryMeanAbs:
     """
-    identity scale, which is torch.ones, which is identity matrix after expansion
+    The idea of this scale drived from https://arxiv.org/abs/2402.02446
+    it calculates the mean of x.abs() among the last dimension.
     """
-
-    def __init__(self, torch_dtype) -> None:
+    def __init__(self, torch_dtype, scale_clamp_min:float = 1e-4) -> None:
         self.scales = {}
         self.n_samples = {}
         self.compute_devices = {}
         self.torch_dtype = torch_dtype
         self.handles = []
+        self.scale_clamp_min = scale_clamp_min
 
     @torch.no_grad()
     def get_scale_hook(self, name: str) -> callable:
@@ -319,8 +320,7 @@ class ScaleHookFactoryMeanAbs:
         for name in scale_names_prog_bar:
             # for name in self.scales:
             scale = self.scales[name].to(self.compute_devices[name])
-            SCALE_CLAMP_MIN=1e-4
-            scale = scale.clamp(min=SCALE_CLAMP_MIN)
+            scale = scale.clamp(min=self.scale_clamp_min)
             scale = scale / torch.sqrt(scale.min() * scale.max())
             self.scales[name] = scale
 
