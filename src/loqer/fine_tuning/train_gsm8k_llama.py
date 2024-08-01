@@ -70,6 +70,7 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/lang
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
+
 def _low_rank_decomposition(weight, reduced_rank=32):
     """
     :param weight: The matrix to decompose, of shape (H, W) :param reduced_rank: the final rank :return:
@@ -85,6 +86,7 @@ def _low_rank_decomposition(weight, reduced_rank=32):
     R = torch.sqrt(torch.diag(S)[0:reduced_rank, :]) @ Vh
 
     return {"L": L, "R": R, "U": U, "S": S, "Vh": Vh, "reduced_rank": reduced_rank}
+
 
 @torch.no_grad()
 def _loftq_init_new(qweight, weight, num_bits: int, reduced_rank: int):
@@ -202,7 +204,7 @@ def replace_lora_weights_loftq(
 def loftQ_parse_args(parser, use_existing_parser=False):
     if not use_existing_parser:
         parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
-    
+
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -915,10 +917,10 @@ def loftQ_fine_tuning(args, AB_dict):
                     accelerator.save_state(output_dir)
             if completed_steps >= args.max_train_steps:
                 break
-        
+
         if args.dataset_name != "GSM8K":
             return model
-        
+
         # GSM8K Accuracy Evaluation
         model.eval()
         gen_kwargs = {
@@ -942,9 +944,7 @@ def loftQ_fine_tuning(args, AB_dict):
 
             if not args.pad_to_max_length:
                 # If we did not pad to max length, we need to pad the labels too
-                gold_tokens = accelerator.pad_across_processes(
-                    batch["labels"], dim=1, pad_index=tokenizer.pad_token_id
-                )
+                gold_tokens = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
 
             pred_tokens, gold_tokens = accelerator.gather_for_metrics((pred_tokens, gold_tokens))
             pred_tokens, gold_tokens = pred_tokens.cpu().numpy(), gold_tokens.cpu().numpy()
@@ -1015,6 +1015,7 @@ def loftQ_fine_tuning(args, AB_dict):
                     commit_message="End of training",
                 )
 
+
 PATTERN_NUMBER = re.compile(r"-?\d+\.?\d*")
 
 
@@ -1049,9 +1050,3 @@ def compute_accuracy(pred: list, gold: list):
             acc += 1
 
     return acc / len(pred)
-
-
-if __name__ == "__main__":
-    args = loftQ_parse_args(None, use_existing_parser=False)
-    loftQ_fine_tuning(args, None)
-    
