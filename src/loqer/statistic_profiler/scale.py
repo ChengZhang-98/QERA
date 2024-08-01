@@ -264,6 +264,73 @@ class ScaleHookFactoryRxx:
         self.handles = []
 
 
+class ScaleHookFactoryMeanAbs:
+    """
+    The idea of this scale drived from https://arxiv.org/abs/2402.02446
+    it calculates the mean of x.abs() among the last dimension.
+    """
+    def __init__(self, torch_dtype, scale_clamp_min:float = 1e-4) -> None:
+        self.scales = {}
+        self.n_samples = {}
+        self.compute_devices = {}
+        self.torch_dtype = torch_dtype
+        self.handles = []
+        self.scale_clamp_min = scale_clamp_min
+
+    @torch.no_grad()
+    def get_scale_hook(self, name: str) -> callable:
+        """ """
+
+        self.scales[name] = None
+        self.n_samples[name] = 0
+
+        @torch.no_grad()
+        def scale_hook(
+            module: torch.nn.Linear,
+            input: tuple[torch.Tensor],
+            output: torch.Tensor,
+        ) -> None:
+            x = input[0]
+            x = x.reshape(-1, x.shape[-1])
+            n_samples, in_features = x.shape
+            if self.scales[name] is None:
+                if self.torch_dtype is None:
+                    self.torch_dtype = x.dtype
+                self.compute_devices[name] = x.device
+                if self.compute_devices[name].type == "cpu":
+                    logger.warning("Using CPU for computing LQER, this may be slow")
+                self.scales[name] = torch.zeros(in_features, dtype=torch.float64)  # *: hard-coded float64
+
+            compute_device = self.compute_devices[name]
+            scale = self.scales[name].to(compute_device)
+            x = x.to(self.torch_dtype)
+            x_abs = x.abs().view(-1, x.shape[-1]).mean(0)
+            scale = torch.maximum(scale, x_abs)
+            self.scales[name] = scale.cpu()
+            self.n_samples[name] += n_samples
+
+        return scale_hook
+
+    @torch.no_grad()
+    def get_scale_dict(self, progress_bar=False) -> dict[str, torch.Tensor]:
+        scale_names_prog_bar = tqdm(
+            self.scales, desc="Computing scale", disable=not progress_bar, total=len(self.scales)
+        )
+
+        for name in scale_names_prog_bar:
+            # for name in self.scales:
+            scale = self.scales[name].to(self.compute_devices[name])
+            scale = scale.clamp(min=self.scale_clamp_min)
+            scale = scale / torch.sqrt(scale.min() * scale.max())
+            self.scales[name] = scale
+
+        return self.scales
+
+    def remove_all_hooks(self):
+        for handle in self.handles:
+            handle.remove()
+        self.handles = []
+
 class ScaleHookFactoryIdentity:
     """
     identity scale, which is torch.ones, which is identity matrix after expansion
@@ -340,6 +407,8 @@ class ScaleHookFactoryMixed:
         self.handles = []
 
 
+
+
 def register_scale_hooks(
     model: torch.nn.Module,
     layers_to_register_and_share: list[str],
@@ -347,13 +416,15 @@ def register_scale_hooks(
     torch_dtype: torch.dtype = None,
     mode_map: dict[str, str] = None,
 ):
-    if mode in ["diagonal", "diag", "rxx", "identity"]:
+    if mode in ["diagonal", "diag", "rxx", "identity", "lqer"]:
         if mode in ["diagonal", "diag"]:
             hook_factory = ScaleHookFactoryDiagonal(torch_dtype)
         elif mode == "rxx":
             hook_factory = ScaleHookFactoryRxx(torch_dtype)
         elif mode == "identity":
             hook_factory = ScaleHookFactoryIdentity(torch_dtype)
+        elif mode == "lqer":
+            hook_factory = ScaleHookFactoryMeanAbs(torch_dtype)
         else:
             raise ValueError(f"mode {mode} is not supported")
 
