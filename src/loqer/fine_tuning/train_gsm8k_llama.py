@@ -449,7 +449,25 @@ def loftQ_parse_args(parser, use_existing_parser=False):
     return args
 
 
-def loftQ_fine_tuning(args, AB_dict):
+def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
+    """
+    Fine-tune a model using Lora and initialize the lora adapter weights with AB_dict.
+    If AB_dict is None, the model will be initialized with LoftQ.
+
+    args.dataset_name: str
+        The name of the dataset to use (via the datasets library).
+        If the dataset is GSM8K, the fine-tuning will be done on GSM8K dataset and custom accuracy evaluation will be done by following the LoftQ paper.
+        Otherwise, this code will return the fine-tuned model but not the evaluation.
+
+    args: argparse.Namespace
+        The arguments for the fine-tuning.
+    model: transformers models
+        The model to fine-tune.
+    AB_dict: dict
+        The dictionary containing the AB weights for the model.
+
+    Returns (model | None): The fine-tuned model for further evaluation.
+    """
     if args.dataset_name is None and args.train_file is None and args.validation_file is None:
         raise ValueError("Need either a dataset name or a training/validation file.")
     else:
@@ -567,66 +585,6 @@ def loftQ_fine_tuning(args, AB_dict):
                 **dataset_args,
             )
 
-    # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
-    # https://huggingface.co/docs/datasets/loading_datasets.html.
-
-    # Load pretrained model and tokenizer
-    #
-    # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
-    # download model & vocab.
-    if args.config_name:
-        config = AutoConfig.from_pretrained(
-            args.config_name,
-            trust_remote_code=args.trust_remote_code,
-        )
-    elif args.model_name_or_path:
-        config = AutoConfig.from_pretrained(
-            args.model_name_or_path,
-            trust_remote_code=args.trust_remote_code,
-        )
-    else:
-        config = CONFIG_MAPPING[args.model_type]()
-        logger.warning("You are instantiating a new config instance from scratch.")
-
-    if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.tokenizer_name, use_fast=not args.use_slow_tokenizer, trust_remote_code=args.trust_remote_code
-        )
-    elif args.model_name_or_path:
-        tokenizer = AutoTokenizer.from_pretrained(
-            args.model_name_or_path,
-            use_fast=not args.use_slow_tokenizer,
-            trust_remote_code=args.trust_remote_code,
-        )
-    else:
-        raise ValueError(
-            "You are instantiating a new tokenizer from scratch. This is not supported by this script."
-            "You can do it from another script, save it, and load it from here, using --tokenizer_name."
-        )
-
-    ##########################
-    #        Tokenizer       #
-    ##########################
-    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
-    tokenizer.padding_side = "left"  # Allow batched inference
-    tokenizer.truncation_side = "left"
-
-    if args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model_name_or_path,
-            from_tf=bool(".ckpt" in args.model_name_or_path),
-            config=config,
-            low_cpu_mem_usage=True,
-            quantization_config=BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=False,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=config.torch_dtype,
-            ),
-        )
-    else:
-        logger.info("Training new model from scratch")
-        model = AutoModelForCausalLM.from_config(config, trust_remote_code=args.trust_remote_code)
 
     ##########################
     #       Peft Model       #
