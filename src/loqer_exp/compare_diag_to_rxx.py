@@ -8,7 +8,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-from loqer.pipeline import _merge_chunked_approximation_error
+from LoQER.src.loqer.ptq_pipeline import _merge_chunked_approximation_error
 from loqer.logging import get_logger
 
 logger = get_logger(__name__)

@@ -37,8 +37,120 @@ def _mse_threshold_emoji(mse: float) -> str:
         return "❌"
 
 
+def calculate_AB_dict(
+    loqer_scaling_mode,
+    loqer_dtype,
+    unquantized_model,
+    tokenizer,
+    loqer_scaling_mode_map,
+    calibration_set,
+    num_calibration_samples,
+    num_workers,
+    perplexity_eval_batch_size,
+    perplexity_max_seq_length,
+    data_collator,
+    loqer_sqrtm_implementation,
+    loqer_sqrtm_num_iters,
+    loqer_config,
+    AB_dict=None,
+    ):
+    """
+    Calculates the A and B dictionaries for Loqer-based quantization.
+
+    Args:
+        unquantized_model (torch.nn.Module): The unquantized model. This model will be quantized by Loqer.
+        tokenizer: The tokenizer for the model.
+        loqer_scaling_mode (str): The scaling mode for Loqer.
+        loqer_dtype (torch.dtype): The data type for Loqer.
+        loqer_scaling_mode_map (dict): The scaling mode map for Loqer.
+        calibration_set (str): The name of the calibration set.
+        num_calibration_samples (int): The number of calibration samples.
+        num_workers (int): The number of workers for data loading.
+        perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
+        perplexity_max_seq_length (int): The maximum sequence length for perplexity evaluation.
+        data_collator: The data collator for data loading.
+        loqer_sqrtm_implementation (str): The implementation for square root of matrix.
+        loqer_sqrtm_num_iters (int): The number of iterations for square root of matrix.
+        loqer_config: The configuration for Loqer.
+        AB_dict (dict, optional): The A and B dictionaries. Defaults to None.
+
+    Returns:
+        tuple: A tuple containing the A and B dictionaries and the mean squared error dataframe.
+    """
+    model = unquantized_model
+    if loqer_scaling_mode == "identity":
+        logger.info("🔊 Using identity scale (torch.eye)")
+
+    logger.info("🚀 Running data calibration...")
+    layers_to_register_and_share = find_layers_to_register_scale_hook(model)
+    profiler_factory = register_scale_hooks(
+        model,
+        layers_to_register_and_share=layers_to_register_and_share,
+        mode=loqer_scaling_mode,
+        torch_dtype=loqer_dtype,
+        mode_map=loqer_scaling_mode_map,
+    )
+
+    calibration_datamodule = get_data_module(
+        name=calibration_set,
+        tokenizer=tokenizer,
+        padding="max_length",
+        max_length=perplexity_max_seq_length,
+        num_raw_samples=20 * num_calibration_samples,
+        num_workers=num_workers,
+    )
+
+    calibration_dataloader = DataLoader(
+        calibration_datamodule["train"],
+        batch_size=perplexity_eval_batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=data_collator,
+    )
+
+    mem_info = get_all_device_mem_info()
+    logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
+    profile_outputs = evaluate_perplexity(
+        model=model,
+        eval_dataloader=calibration_dataloader,
+        num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
+        progress_bar=True,
+        input_device=None,
+        description="Calibrating",
+    )
+
+    profiler_factory.remove_all_hooks()
+    if loqer_scaling_mode == "rxx":
+        scale_dict = profiler_factory.get_scale_dict(
+            progress_bar=True,
+            sqrtm_implementation=loqer_sqrtm_implementation,
+            sqrtm_num_iters=loqer_sqrtm_num_iters,
+        )
+    else:
+        scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+
+    share_scales(scale_dict, layers_to_register_and_share)
+    logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
+
+    logger.info("🚀 Quantizing model...")
+    quantize_model(model, loqer_config)
+
+    layers_to_approximate = find_layers_to_approximate(model)
+    logger.info("🚀 Loqer is enabled. Computing A & B...")
+    AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+    del scale_dict
+    attach_AB(model, layers_to_approximate, AB_dict)
+    mse_df_emoji = mse_df.copy()
+    mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
+    logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
+    
+    return AB_dict, mse_df
+    # logger.info(f"Model after approximation: \n{model}")
+
 def pipeline_loqer():
     parser = ArgumentParser()
+    fine_tuning_group = parser.add_argument_group("Fine_Tuning Configuration")
+    loftQ_parse_args(fine_tuning_group, use_existing_parser=True)
     parser.add_argument("config", type=str, help="Path to the configuration file")
     parser.add_argument("--model-name", dest="model_name", type=str, help="Model name", default=None)
     parser.add_argument("--loqer-dtype", dest="loqer_dtype", type=str, help="Loqer data type", default=None)
@@ -128,6 +240,16 @@ def pipeline_loqer():
             config[entry] = value
             override_args[entry] = value
 
+    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments... 
+    # (because there are many default values in the command line arguments)
+    if "fine_tuning_config" in config:
+        fine_tuning_config = config.pop("fine_tuning_config")
+        config.update(fine_tuning_config)
+        args.update(fine_tuning_config)
+        for entry, value in fine_tuning_config.items():
+            override_args.pop(entry, None)
+
+
     logger.info(f"Configuration: \n{pformat(config, indent=4)}")
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
 
@@ -186,7 +308,11 @@ def pipeline_loqer():
             raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
     # Load model and tokenizer
-    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_name,
+        use_fast=not args['use_slow_tokenizer'],
+        trust_remote_code=args['trust_remote_code'],
+        )
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
     )
@@ -198,81 +324,60 @@ def pipeline_loqer():
     model = dispatch_model(model, device_map)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-    if not disable_loqer and AB_dict is None:
-        if loqer_scaling_mode == "identity":
-            logger.info("🔊 Using identity scale (torch.eye)")
-        logger.info("🚀 Running data calibration...")
-        layers_to_register_and_share = find_layers_to_register_scale_hook(model)
-        profiler_factory = register_scale_hooks(
-            model,
-            layers_to_register_and_share=layers_to_register_and_share,
-            mode=loqer_scaling_mode,
-            torch_dtype=loqer_dtype,
-            mode_map=loqer_scaling_mode_map,
-        )
-
-        calibration_datamodule = get_data_module(
-            name=calibration_set,
-            tokenizer=tokenizer,
-            padding="max_length",
-            max_length=perplexity_max_seq_length,
-            num_raw_samples=20 * num_calibration_samples,
-            num_workers=num_workers,
-        )
-
-        calibration_dataloader = DataLoader(
-            calibration_datamodule["train"],
-            batch_size=perplexity_eval_batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=data_collator,
-        )
-
-        mem_info = get_all_device_mem_info()
-        logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
-        profile_outputs = evaluate_perplexity(
-            model=model,
-            eval_dataloader=calibration_dataloader,
-            num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
-            progress_bar=True,
-            input_device=None,
-            description="Calibrating",
-        )
-
-        profiler_factory.remove_all_hooks()
-        if loqer_scaling_mode == "rxx":
-            scale_dict = profiler_factory.get_scale_dict(
-                progress_bar=True,
-                sqrtm_implementation=loqer_sqrtm_implementation,
-                sqrtm_num_iters=loqer_sqrtm_num_iters,
+    if not disable_loqer:
+        if AB_dict is None:
+            AB_dict, mse_df = calculate_AB_dict(
+                loqer_scaling_mode=loqer_scaling_mode,
+                loqer_dtype=loqer_dtype,
+                unquantized_model=model,
+                tokenizer=tokenizer,
+                loqer_scaling_mode_map=loqer_scaling_mode_map,
+                calibration_set=calibration_set,
+                num_calibration_samples=num_calibration_samples,
+                num_workers=num_workers,
+                perplexity_eval_batch_size=perplexity_eval_batch_size,
+                perplexity_max_seq_length=perplexity_max_seq_length,
+                data_collator=data_collator,
+                loqer_sqrtm_implementation=loqer_sqrtm_implementation,
+                loqer_sqrtm_num_iters=loqer_sqrtm_num_iters,
+                loqer_config=loqer_config,
+                AB_dict=AB_dict,
             )
         else:
-            scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
-
-        share_scales(scale_dict, layers_to_register_and_share)
-        logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
-
-    logger.info("🚀 Quantizing model...")
-    quantize_model(model, loqer_config)
-
-    if not disable_loqer:
-        layers_to_approximate = find_layers_to_approximate(model)
-        if AB_dict is None:
-            logger.info("🚀 Loqer is enabled. Computing A & B...")
-            AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
-            del scale_dict
-            attach_AB(model, layers_to_approximate, AB_dict)
-            mse_df_emoji = mse_df.copy()
-            mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
-            logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
-        else:
-            logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
             mse_df = None
-            attach_AB(model, layers_to_approximate, AB_dict)
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
-    # logger.info(f"Model after approximation: \n{model}")
+
+    # Fine-tuning
+    # TODO: not sure if this is necessary for all datasets (I copied this from the gsm8K)
+    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+    tokenizer.padding_side = "left"  # Allow batched inference
+    tokenizer.truncation_side = "left"
+    config = transformers.AutoConfig.from_pretrained(
+        model_name,
+        trust_remote_code=args['trust_remote_code'],
+    )
+    # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
+    if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat' and loqer_config['default-1']['w_quantizer']['name'] != 'bfloat':
+        if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
+            raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name,
+        from_tf=bool(".ckpt" in model_name),
+        config=config,
+        low_cpu_mem_usage=True,
+        quantization_config=transformers.BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=False,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=config.torch_dtype,
+        ),
+    )
+    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    logger.info("🚀 Fine-tuning...")
+    fine_tuning_args = Namespace(**args)
+    model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -689,6 +794,180 @@ def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag
     return missing_chunks
 
 
+def calculate_chunk_AB_Dict(
+        model_name, 
+        loqer_dtype, 
+        num_chunks, 
+        disable_loqer, 
+        loqer_scaling_mode, 
+        loqer_sqrtm_implementation, 
+        loqer_sqrtm_num_iters, 
+        loqer_config,
+        loqer_scaling_mode_map,
+        calibration_set,
+        perplexity_max_seq_length,
+        num_calibration_samples,
+        num_workers,
+        perplexity_eval_batch_size,
+        AB_dict_dir,
+        output_dir,
+        chunk_tag,
+        missing_chunks,
+        config,
+        device_map,
+        chunk_id=None):
+    """
+    Calculates the A and B dictionaries for a given chunk in the LoQER pipeline.
+
+    Args:
+        model_name (str): The name or path of the pre-trained model. This function loads the model and tokenizer.
+        loqer_dtype (torch.dtype): The data type to use for LoQER calculations.
+        num_chunks (int): The total number of chunks in the pipeline.
+        disable_loqer (bool): Whether to disable LoQER for the chunked pipeline.
+        loqer_scaling_mode (str): The scaling mode to use for LoQER. Should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer'].
+        loqer_sqrtm_implementation (str): The implementation to use for calculating the square root of a matrix. Should be one of ['blocked', 'iterative'].
+        loqer_sqrtm_num_iters (int): The number of iterations to use for the iterative square root calculation.
+        loqer_config (dict): The configuration for LoQER.
+        loqer_scaling_mode_map (dict): The mapping of scaling modes to their corresponding implementation modes.
+        calibration_set (str): The name of the calibration dataset.
+        perplexity_max_seq_length (int): The maximum sequence length for perplexity evaluation.
+        num_calibration_samples (int): The number of calibration samples.
+        num_workers (int): The number of workers for data loading.
+        perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
+        AB_dict_dir (str): The directory to save the A and B dictionaries.
+        output_dir (str): The output directory for saving the results.
+        chunk_tag (str): The tag for the current chunk.
+        missing_chunks (list): The list of missing chunks.
+        config (dict): The configuration for the current chunk.
+        device_map (dict): The mapping of layers to devices.
+        chunk_id (int, optional): The ID of the current chunk. Defaults to None.
+
+    Raises:
+        ValueError: If disable_loqer is True for the chunked pipeline or if loqer_scaling_mode is not one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer'].
+
+    Returns:
+        None (saves the A and B dictionaries to the output directory).
+    """
+    # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
+    if disable_loqer:
+        raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
+    else:
+        if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity", "lqer"]:
+            raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']")
+
+    # sqrtm_implementation
+    if loqer_scaling_mode in ["rxx", "mixed"]:
+        if loqer_sqrtm_implementation == "blocked":
+            # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
+            logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
+        elif loqer_sqrtm_implementation == "iterative":
+            # refer to https://link.springer.com/article/10.1023/A:1019150005407
+            logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
+        else:
+            raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
+
+    # Load model and tokenizer
+    tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+    )
+    model.eval()
+    if hasattr(model, "tie_weights"):
+        model.tie_weights()
+    device_map = create_device_map(model, device_map=device_map)
+    logger.info(f"Device map: {device_map}")
+    model = dispatch_model(model, device_map)
+    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    # solve chunk_id
+    layers_to_register_and_share = find_layers_to_register_scale_hook(model)
+    layers_to_register_and_share = layers_to_register_and_share[chunk_id::num_chunks]
+    logger.info(
+        f"🔊 Chunk id = {chunk_id}, total number of chunks = {num_chunks}, layers included in this chunk:\n{pformat(list(map(lambda x: x['target_layer'], layers_to_register_and_share)))}"
+    )
+
+    profiler_factory = register_scale_hooks(
+        model,
+        layers_to_register_and_share=layers_to_register_and_share,
+        mode=loqer_scaling_mode,
+        torch_dtype=loqer_dtype,
+        mode_map=loqer_scaling_mode_map,
+    )
+
+    calibration_datamodule = get_data_module(
+        name=calibration_set,
+        tokenizer=tokenizer,
+        padding="max_length",
+        max_length=perplexity_max_seq_length,
+        num_raw_samples=20 * num_calibration_samples,
+        num_workers=num_workers,
+    )
+
+    calibration_dataloader = DataLoader(
+        calibration_datamodule["train"],
+        batch_size=perplexity_eval_batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=data_collator,
+    )
+
+    mem_info = get_all_device_mem_info()
+    logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
+    profile_outputs = evaluate_perplexity(
+        model=model,
+        eval_dataloader=calibration_dataloader,
+        num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
+        progress_bar=True,
+        input_device=None,
+        description="Calibrating",
+    )
+
+    profiler_factory.remove_all_hooks()
+    if loqer_scaling_mode in ["rxx", "mixed"]:
+        scale_dict = profiler_factory.get_scale_dict(
+            progress_bar=True,
+            sqrtm_implementation=loqer_sqrtm_implementation,
+            sqrtm_num_iters=loqer_sqrtm_num_iters,
+        )
+    else:
+        scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+
+    share_scales(scale_dict, layers_to_register_and_share)
+    logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
+
+    logger.info("🚀 Quantizing model...")
+    quantize_model(model, loqer_config)
+
+    logger.info("🚀 Loqer is enabled. Computing A & B...")
+    layers_to_approximate = find_layers_to_approximate(model)
+    layers_to_approximate = list(filter(lambda x: x in scale_dict, layers_to_approximate))
+    AB_dict, mse_df = compute_AB_and_approximation_error(
+        model, layers_to_approximate, scale_dict, loqer_config, move_model_back=False
+    )
+    del scale_dict
+    mse_df_emoji = mse_df.copy()
+    mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
+    logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
+
+    missing_chunks = _verify_AB_dict_chunks(
+        AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=chunk_tag
+    )
+
+    # save this chunk
+    mse_df_dir = output_dir.joinpath("approximation_error")
+    config_dir = output_dir.joinpath("config")
+    AB_dict_path = AB_dict_dir.joinpath(f"{chunk_tag}.pt")
+    logger.info(f"Current missing chunks: {missing_chunks}")
+    AB_dict_dir.mkdir(parents=True, exist_ok=True)
+    mse_df_dir.mkdir(parents=True, exist_ok=True)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    mse_df.to_csv(mse_df_dir.joinpath(f"{chunk_tag}.csv"), index=False)
+    torch.save(AB_dict, AB_dict_path)
+    with open(config_dir.joinpath(f"{chunk_tag}.yaml"), "w") as f:
+        yaml.dump(config, f)
+
+
 def pipeline_loqer_chunked():
     parser = ArgumentParser()
     fine_tuning_group = parser.add_argument_group("Fine_Tuning Configuration")
@@ -801,7 +1080,6 @@ def pipeline_loqer_chunked():
     device_map = config["device_map"]
     num_workers = config["num_workers"]
     output_dir = Path(config["output_dir"]) if config["output_dir"] is not None else None
-    # AB_dict = config["AB_dict"]
     calibration_set = config["calibration_set"]
     num_calibration_samples = config["num_calibration_samples"]
     perplexity_evaluation_set = config["perplexity_eval_set"]
@@ -822,11 +1100,7 @@ def pipeline_loqer_chunked():
 
     layers_per_chunk = config["layers_per_chunk"]
     chunk_id = config["chunk_id"]
-    # Lora fine-tuning
-    fine_tuning = config.get("fine_tuning", False)
 
-
-    # assert chunk_id is not None
     assert output_dir is not None
 
     num_chunks = _check_chunk_id(model_name, layers_per_chunk, chunk_id)
@@ -837,222 +1111,143 @@ def pipeline_loqer_chunked():
     missing_chunks = _verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None)
     assert not (len(missing_chunks) > 0 and chunk_id is None), f"Missing chunks: {missing_chunks}"
 
-    if len(missing_chunks) > 0:
-        # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
-        if disable_loqer:
-            raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
-        else:
-            if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity", "lqer"]:
-                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']")
-
-        # sqrtm_implementation
-        if loqer_scaling_mode in ["rxx", "mixed"]:
-            if loqer_sqrtm_implementation == "blocked":
-                # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
-                logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
-            elif loqer_sqrtm_implementation == "iterative":
-                # refer to https://link.springer.com/article/10.1023/A:1019150005407
-                logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
-            else:
-                raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
-
-        # Load model and tokenizer
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
-        )
-        model.eval()
-        if hasattr(model, "tie_weights"):
-            model.tie_weights()
-        device_map = create_device_map(model, device_map=device_map)
-        logger.info(f"Device map: {device_map}")
-        model = dispatch_model(model, device_map)
-        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-
-        # solve chunk_id
-        layers_to_register_and_share = find_layers_to_register_scale_hook(model)
-        layers_to_register_and_share = layers_to_register_and_share[chunk_id::num_chunks]
-        logger.info(
-            f"🔊 Chunk id = {chunk_id}, total number of chunks = {num_chunks}, layers included in this chunk:\n{pformat(list(map(lambda x: x['target_layer'], layers_to_register_and_share)))}"
-        )
-
-        profiler_factory = register_scale_hooks(
-            model,
-            layers_to_register_and_share=layers_to_register_and_share,
-            mode=loqer_scaling_mode,
-            torch_dtype=loqer_dtype,
-            mode_map=loqer_scaling_mode_map,
-        )
-
-        calibration_datamodule = get_data_module(
-            name=calibration_set,
-            tokenizer=tokenizer,
-            padding="max_length",
-            max_length=perplexity_max_seq_length,
-            num_raw_samples=20 * num_calibration_samples,
-            num_workers=num_workers,
-        )
-
-        calibration_dataloader = DataLoader(
-            calibration_datamodule["train"],
-            batch_size=perplexity_eval_batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=data_collator,
-        )
-
-        mem_info = get_all_device_mem_info()
-        logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
-        profile_outputs = evaluate_perplexity(
-            model=model,
-            eval_dataloader=calibration_dataloader,
-            num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
-            progress_bar=True,
-            input_device=None,
-            description="Calibrating",
-        )
-
-        profiler_factory.remove_all_hooks()
-        if loqer_scaling_mode in ["rxx", "mixed"]:
-            scale_dict = profiler_factory.get_scale_dict(
-                progress_bar=True,
-                sqrtm_implementation=loqer_sqrtm_implementation,
-                sqrtm_num_iters=loqer_sqrtm_num_iters,
+    # chunk_id is provided, indicating that calculation of AB_dict is needed
+    if chunk_id is not None:
+        if len(missing_chunks) > 0:
+            calculate_chunk_AB_Dict(
+                model_name=model_name,
+                loqer_dtype=loqer_dtype,
+                num_chunks=num_chunks,
+                disable_loqer=disable_loqer,
+                loqer_scaling_mode=loqer_scaling_mode,
+                loqer_sqrtm_implementation=loqer_sqrtm_implementation,
+                loqer_sqrtm_num_iters=loqer_sqrtm_num_iters,
+                loqer_config=loqer_config,
+                loqer_scaling_mode_map=loqer_scaling_mode_map,
+                calibration_set=calibration_set,
+                perplexity_max_seq_length=perplexity_max_seq_length,
+                num_calibration_samples=num_calibration_samples,
+                num_workers=num_workers,
+                perplexity_eval_batch_size=perplexity_eval_batch_size,
+                AB_dict_dir=AB_dict_dir,
+                device_map=device_map,
+                output_dir=output_dir,
+                chunk_tag=chunk_tag,
+                missing_chunks=missing_chunks,
+                config=config,
+                chunk_id=chunk_id,
             )
         else:
-            scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+            logger.info(f"All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning.")
 
-        share_scales(scale_dict, layers_to_register_and_share)
-        logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
+    # chunk_id is not provided, indicating that all chunks are ready, try to load AB_dict and run fine-tuning
+    if chunk_id is None:
+        if len(missing_chunks) > 0:
+            logger.info(f"Missing chunks: \n{pformat(missing_chunks)}")
+            raise ValueError("Can't load the AB_dict to perform fine-tuning. Missing chunks. Please provide chunk_id to calculate the AB_dict.")
+        else:
+            logger.info(f"🔊 All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning.")
+            # # Load model and tokenizer
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
+                model_name,
+                use_fast=not args['use_slow_tokenizer'],
+                trust_remote_code=args['trust_remote_code'],
+            )
+            # TODO: not sure if this is necessary for all datasets (I copied this from the gsm8K)
+            tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+            tokenizer.padding_side = "left"  # Allow batched inference
+            tokenizer.truncation_side = "left"
 
-        logger.info("🚀 Quantizing model...")
-        quantize_model(model, loqer_config)
+            config = transformers.AutoConfig.from_pretrained(
+                model_name,
+                trust_remote_code=args['trust_remote_code'],
+            )
+            # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
+            if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat' and loqer_config['default-1']['w_quantizer']['name'] != 'bfloat':
+                if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
+                    raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
+            model = transformers.AutoModelForCausalLM.from_pretrained(
+                model_name,
+                from_tf=bool(".ckpt" in model_name),
+                config=config,
+                low_cpu_mem_usage=True,
+                quantization_config=transformers.BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_use_double_quant=False,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=config.torch_dtype,
+                ),
+            )
+            data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
-        logger.info("🚀 Loqer is enabled. Computing A & B...")
-        layers_to_approximate = find_layers_to_approximate(model)
-        layers_to_approximate = list(filter(lambda x: x in scale_dict, layers_to_approximate))
-        AB_dict, mse_df = compute_AB_and_approximation_error(
-            model, layers_to_approximate, scale_dict, loqer_config, move_model_back=False
-        )
-        del scale_dict
-        mse_df_emoji = mse_df.copy()
-        mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
-        logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
-
-        missing_chunks = _verify_AB_dict_chunks(
-            AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=chunk_tag
-        )
-
-        # save this chunk
-        mse_df_dir = output_dir.joinpath("approximation_error")
-        config_dir = output_dir.joinpath("config")
-        AB_dict_path = AB_dict_dir.joinpath(f"{chunk_tag}.pt")
-        logger.info(f"Current missing chunks: {missing_chunks}")
-        AB_dict_dir.mkdir(parents=True, exist_ok=True)
-        mse_df_dir.mkdir(parents=True, exist_ok=True)
-        config_dir.mkdir(parents=True, exist_ok=True)
-
-        mse_df.to_csv(mse_df_dir.joinpath(f"{chunk_tag}.csv"), index=False)
-        torch.save(AB_dict, AB_dict_path)
-        with open(config_dir.joinpath(f"{chunk_tag}.yaml"), "w") as f:
-            yaml.dump(config, f)
-    else:
-        logger.info(f"🔊 All chunks of AB_dict are ready. Quantize model, attach AB_dict and run evaluation.")
-        # Load model and tokenizer
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
-        )
-        model.eval()
-        if hasattr(model, "tie_weights"):
-            model.tie_weights()
-        device_map = create_device_map(model, device_map=device_map)
-        logger.info(f"Device map: {device_map}")
-        model = dispatch_model(model, device_map)
-        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-        quantize_model(model, loqer_config)
-
-    if len(missing_chunks) == 0:
-        # merge all chunks
-        AB_dict = {}
-        AB_dict_chunks = list(filter(lambda x: x.is_file() and x.name.endswith(".pt"), AB_dict_dir.iterdir()))
-        for chunk in tqdm(AB_dict_chunks, desc="Loading chunks"):
-            AB_dict.update(torch.load(chunk))
-                
-        # We don't need to use the loqer_quantized model here. The training script will load the model from the model_name_or_path
-        if fine_tuning:
-            # fine-tuning the model
-            if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat':
-                raise ValueError("Fine-tuning only supports normalfloat quantizer.")
+            # merge all chunks
+            AB_dict = {}
+            AB_dict_chunks = list(filter(lambda x: x.is_file() and x.name.endswith(".pt"), AB_dict_dir.iterdir()))
+            for chunk in tqdm(AB_dict_chunks, desc="Loading chunks"):
+                AB_dict.update(torch.load(chunk))
+            
             logger.info("🚀 Fine-tuning...")
             fine_tuning_args = Namespace(**args)
-            model=loftQ_fine_tuning(fine_tuning_args, AB_dict=AB_dict)
-        else:
-            # attach A & B
-            layers_to_approximate = find_layers_to_approximate(model)
-            attach_AB(model, layers_to_approximate, AB_dict)
+            model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
-        # evaluate
-        if not disable_perplexity_eval:
-            logger.info("🚀 Evaluating perplexity...")
-            eval_datamodule = get_data_module(
-                name=perplexity_evaluation_set,
-                tokenizer=tokenizer,
-                padding="max_length",
-                max_length=perplexity_max_seq_length,
-                num_raw_samples=None,
-                num_workers=num_workers,
-            )
-            eval_dataloader = DataLoader(
-                eval_datamodule["test"],
-                batch_size=perplexity_eval_batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                collate_fn=data_collator,
-            )
-            model = model.to(eval_dtype)
-            model = dispatch_model(model, device_map)
-            mem_info = get_all_device_mem_info()
-            logger.info(f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}")
-            ppl_results = evaluate_perplexity(
-                model=model,
-                eval_dataloader=eval_dataloader,
-                num_samples=None,
-                progress_bar=True,
-                input_device=None,
-                description="Evaluating",
-            )
+            # evaluate
+            if not disable_perplexity_eval:
+                logger.info("🚀 Evaluating perplexity...")
+                eval_datamodule = get_data_module(
+                    name=perplexity_evaluation_set,
+                    tokenizer=tokenizer,
+                    padding="max_length",
+                    max_length=perplexity_max_seq_length,
+                    num_raw_samples=None,
+                    num_workers=num_workers,
+                )
+                eval_dataloader = DataLoader(
+                    eval_datamodule["test"],
+                    batch_size=perplexity_eval_batch_size,
+                    shuffle=False,
+                    num_workers=num_workers,
+                    collate_fn=data_collator,
+                )
+                model = model.to(eval_dtype)
+                model = dispatch_model(model, device_map)
+                mem_info = get_all_device_mem_info()
+                logger.info(f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}")
+                ppl_results = evaluate_perplexity(
+                    model=model,
+                    eval_dataloader=eval_dataloader,
+                    num_samples=None,
+                    progress_bar=True,
+                    input_device=None,
+                    description="Evaluating",
+                )
 
-            if disable_loqer:
-                logger.info(f"Perplexity after quantization (no LoQER): {ppl_results['perplexity']:.4f}")
-            else:
-                logger.info(f"Perplexity after approximation: {ppl_results['perplexity']:.4f}")
+                if disable_loqer:
+                    logger.info(f"Perplexity after quantization (no LoQER): {ppl_results['perplexity']:.4f}")
+                else:
+                    logger.info(f"Perplexity after approximation: {ppl_results['perplexity']:.4f}")
 
-        if not disable_lm_eval:
-            logger.info("🚀 Evaluating lm-eval downstream tasks...")
-            model = model.to(eval_dtype)
-            model = dispatch_model(model, device_map)
-            lm_eval_results = evaluate_harness_downstream(
-                model,
-                tasks=lm_eval_tasks,
-                num_fewshot=lm_eval_num_fewshot,
-                no_cache=True,
-                batch_size=lm_eval_batch_size,
-            )
-            logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+            if not disable_lm_eval:
+                logger.info("🚀 Evaluating lm-eval downstream tasks...")
+                model = model.to(eval_dtype)
+                model = dispatch_model(model, device_map)
+                lm_eval_results = evaluate_harness_downstream(
+                    model,
+                    tasks=lm_eval_tasks,
+                    num_fewshot=lm_eval_num_fewshot,
+                    no_cache=True,
+                    batch_size=lm_eval_batch_size,
+                )
+                logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
 
-        # save perplexity results
-        if not disable_perplexity_eval:
-            with open(output_dir / "perplexity_results.yaml", "w") as f:
-                yaml.dump(ppl_results, f)
+            # save perplexity results
+            if not disable_perplexity_eval:
+                with open(output_dir / "perplexity_results.yaml", "w") as f:
+                    yaml.dump(ppl_results, f)
 
-        # save lm-eval results
-        if not disable_lm_eval:
-            with open(output_dir / "lm_eval_results.yaml", "w") as f:
-                yaml.dump(lm_eval_results, f)
-    else:
-        logger.info(f"Chunk {chunk_tag} is saved. Please run the pipeline for the rest chunks.")
-        logger.info(f"Missing chunks: \n{pformat(missing_chunks)}")
+            # save lm-eval results
+            if not disable_lm_eval:
+                with open(output_dir / "lm_eval_results.yaml", "w") as f:
+                    yaml.dump(lm_eval_results, f)
 
 
 def chunk_checker():
