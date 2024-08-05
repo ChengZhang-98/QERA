@@ -28,3 +28,4 @@ sqlitedict
 tqdm-multiprocess
 zstandard
 bitsandbytes==0.43.2
+matplotlib
