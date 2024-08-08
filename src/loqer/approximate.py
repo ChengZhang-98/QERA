@@ -108,6 +108,8 @@ def _compute_scales_and_error_for_fc(
     weight = layer.weight
 
     weight_q = w_quantizer(weight)
+    print("weight_q:", weight_q.device)
+    print("weight:", weight.device)
     scale = scale.to(weight.dtype).to(weight.device)
     if scale.ndim == 1:
         assert scale.shape[0] == weight.shape[1], "Scale must have the same number of elements as the weight"
