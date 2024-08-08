@@ -98,9 +98,6 @@ class ScaleHookFactoryRxx:
 
     @torch.no_grad()
     def get_scale_dict(self, progress_bar=False) -> dict[str, torch.Tensor]:
-        for name in tqdm(self.scales, desc="Checking positive definiteness", disable=not progress_bar):
-            A = self.scales[name]
-            self.is_pos_def[name] = is_pos_def(A)
 
         # convert to numpy
         for name in self.scales:
