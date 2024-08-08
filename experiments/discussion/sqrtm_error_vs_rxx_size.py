@@ -10,6 +10,7 @@ import logging
 import math
 import multiprocessing
 from pprint import pprint
+import re
 
 import torch
 import numpy as np
@@ -97,15 +98,15 @@ class ScaleHookFactoryRxx:
 
     @torch.no_grad()
     def get_scale_dict(self, progress_bar=False) -> dict[str, torch.Tensor]:
+        for name in tqdm(self.scales, desc="Checking positive definiteness", disable=not progress_bar):
+            A = self.scales[name]
+            self.is_pos_def[name] = is_pos_def(A)
+
         # convert to numpy
         for name in self.scales:
             self.scales[name] = self.scales[name].cpu().numpy()
         num_cores = multiprocessing.cpu_count()
         num_processes = max(1, num_cores // 64)
-
-        for name in tqdm(self.scales, desc="Checking positive definiteness", disable=not progress_bar):
-            A = self.scales[name]
-            self.is_pos_def[name] = is_pos_def(A)
 
         with multiprocessing.Pool(num_processes) as pool:
             with tqdm(total=len(self.scales), desc="Computing scale", disable=not progress_bar) as pbar:
@@ -144,13 +145,17 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=model_dtype, _attn_implementation="eager"
     )
+    assert isinstance(model, LlamaForCausalLM)
     model.eval()
+    max_layer_idx = max([int(re.search(r"\d+", layer_name).group()) for layer_name in layers_to_profile])
+    # remove the layers after the last layer to profile
+    model.model.layers = model.model.layers[: max_layer_idx + 1]
+    print(f"Removed layers after {max_layer_idx}. Pruned model: \n", model.model.layers)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
     device_map = create_device_map(model, device_map="auto-balanced")
     model = dispatch_model(model, device_map)
 
-    assert isinstance(model, LlamaForCausalLM)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
@@ -194,7 +199,7 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
         profiled_layers=layers_to_profile,
         errests=list(hook_factory.errests.values()),
         is_pos_def=list(hook_factory.is_pos_def.values()),
-        sizes=list(hook_factory.sizes.values()),
+        rxx_sizes=list(hook_factory.sizes.values()),
     )
     return sqrtm_result_profile
 
@@ -233,14 +238,14 @@ if __name__ == "__main__":
     model_names = args.model_names
     layers_to_profile = args.layers_to_profile
     timestamp = datetime.datetime.now().strftime("%Y%-m-%d_%H-%M-%S")
-    yaml_path = Path(__file__).parent.joinpath(f"sqrtm_estimated_error_vs_hidden_size_{timestamp}.yaml")
+    yaml_path = Path(__file__).parent.joinpath(f"sqrtm_error_vs_rxx_size_{timestamp}.yaml")
     results = []
 
     for model_name in model_names:
         result = sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile=layers_to_profile)
         results.append(result)
         with open(yaml_path, "w") as f:
-            yaml.dump(results, f)
+            yaml.safe_dump(results, f)
         pprint(result, sort_dicts=False)
 
 
