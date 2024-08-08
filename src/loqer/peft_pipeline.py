@@ -36,19 +36,71 @@ def _mse_threshold_emoji(mse: float) -> str:
     else:
         return "❌"
 
+def load_calibration_dataloader(
+    tokenizer,
+    calibration_set,
+    perplexity_max_seq_length,
+    num_calibration_samples,
+    num_workers,
+    perplexity_eval_batch_size,
+    args: Namespace = None,
+    ):
+    """
+    Load the calibration dataloader for language model perplexity evaluation.
+
+    Args:
+        tokenizer (transformers.PreTrainedTokenizer): The tokenizer used for tokenizing the input data.
+        calibration_set (str): The name of the calibration dataset.
+        perplexity_max_seq_length (int): The maximum sequence length for the perplexity evaluation.
+        num_calibration_samples (int): The number of calibration samples.
+        num_workers (int): The number of workers for data loading.
+        perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
+        args (Namespace, optional): The ArgumentParser.Namespace arguments. Defaults to None.
+
+    Returns:
+        torch.utils.data.DataLoader: The calibration dataloader.
+
+    """
+    
+    calibration_datamodule = get_data_module(
+        name=calibration_set,
+        tokenizer=tokenizer,
+        padding="max_length",
+        max_length=perplexity_max_seq_length,
+        num_raw_samples=20 * num_calibration_samples,
+        num_workers=num_workers,
+        args=args,
+    )
+
+    if calibration_set == "gsm8k":                    
+        calibration_dataloader = DataLoader(
+            calibration_datamodule["train"], 
+            shuffle=True, 
+            collate_fn=transformers.default_data_collator, 
+            batch_size=perplexity_eval_batch_size
+        )
+    else: 
+        "wikitext2, slim_pajama_6b"
+        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        calibration_dataloader = DataLoader(
+            calibration_datamodule["train"],
+            batch_size=perplexity_eval_batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=data_collator,
+        )                                                                         
+
+    return calibration_dataloader
+
 
 def calculate_AB_dict(
     loqer_scaling_mode,
     loqer_dtype,
     unquantized_model,
-    tokenizer,
     loqer_scaling_mode_map,
-    calibration_set,
+    calibration_dataloader,
     num_calibration_samples,
-    num_workers,
     perplexity_eval_batch_size,
-    perplexity_max_seq_length,
-    data_collator,
     loqer_sqrtm_implementation,
     loqer_sqrtm_num_iters,
     loqer_config,
@@ -59,16 +111,12 @@ def calculate_AB_dict(
 
     Args:
         unquantized_model (torch.nn.Module): The unquantized model. This model will be quantized by Loqer.
-        tokenizer: The tokenizer for the model.
         loqer_scaling_mode (str): The scaling mode for Loqer.
         loqer_dtype (torch.dtype): The data type for Loqer.
         loqer_scaling_mode_map (dict): The scaling mode map for Loqer.
-        calibration_set (str): The name of the calibration set.
+        calibration_dataloader (DataLoader): The calibration dataloader.
         num_calibration_samples (int): The number of calibration samples.
-        num_workers (int): The number of workers for data loading.
         perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
-        perplexity_max_seq_length (int): The maximum sequence length for perplexity evaluation.
-        data_collator: The data collator for data loading.
         loqer_sqrtm_implementation (str): The implementation for square root of matrix.
         loqer_sqrtm_num_iters (int): The number of iterations for square root of matrix.
         loqer_config: The configuration for Loqer.
@@ -91,22 +139,6 @@ def calculate_AB_dict(
         mode_map=loqer_scaling_mode_map,
     )
 
-    calibration_datamodule = get_data_module(
-        name=calibration_set,
-        tokenizer=tokenizer,
-        padding="max_length",
-        max_length=perplexity_max_seq_length,
-        num_raw_samples=20 * num_calibration_samples,
-        num_workers=num_workers,
-    )
-
-    calibration_dataloader = DataLoader(
-        calibration_datamodule["train"],
-        batch_size=perplexity_eval_batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        collate_fn=data_collator,
-    )
 
     mem_info = get_all_device_mem_info()
     logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
@@ -146,6 +178,7 @@ def calculate_AB_dict(
     
     return AB_dict, mse_df
     # logger.info(f"Model after approximation: \n{model}")
+
 
 def pipeline_loqer():
     parser = ArgumentParser()
@@ -322,22 +355,25 @@ def pipeline_loqer():
     device_map = create_device_map(model, device_map=device_map)
     logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if not disable_loqer:
         if AB_dict is None:
+            calibration_dataloader = load_calibration_dataloader(
+                tokenizer=tokenizer,
+                calibration_set=calibration_set,
+                perplexity_max_seq_length=perplexity_max_seq_length,
+                num_calibration_samples=num_calibration_samples,
+                num_workers=num_workers,
+                perplexity_eval_batch_size=perplexity_eval_batch_size,
+            )
             AB_dict, mse_df = calculate_AB_dict(
                 loqer_scaling_mode=loqer_scaling_mode,
                 loqer_dtype=loqer_dtype,
                 unquantized_model=model,
-                tokenizer=tokenizer,
                 loqer_scaling_mode_map=loqer_scaling_mode_map,
-                calibration_set=calibration_set,
+                calibration_dataloader=calibration_dataloader,
                 num_calibration_samples=num_calibration_samples,
-                num_workers=num_workers,
                 perplexity_eval_batch_size=perplexity_eval_batch_size,
-                perplexity_max_seq_length=perplexity_max_seq_length,
-                data_collator=data_collator,
                 loqer_sqrtm_implementation=loqer_sqrtm_implementation,
                 loqer_sqrtm_num_iters=loqer_sqrtm_num_iters,
                 loqer_config=loqer_config,
