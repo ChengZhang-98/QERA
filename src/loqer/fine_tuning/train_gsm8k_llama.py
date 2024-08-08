@@ -876,7 +876,7 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             if completed_steps >= args.max_train_steps:
                 break
 
-        if args.dataset_name != "GSM8K":
+        if args.dataset_name.lower() != "gsm8k":
             return model
 
         # GSM8K Accuracy Evaluation
