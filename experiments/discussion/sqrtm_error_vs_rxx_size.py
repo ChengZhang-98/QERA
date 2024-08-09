@@ -18,7 +18,7 @@ from scipy import linalg as spla
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import transformers
-from accelerate import dispatch_model
+from accelerate import dispatch_model, infer_auto_device_map
 from torch.utils.data import DataLoader
 from loqer.datasets import get_data_module
 from loqer.evaluate import evaluate_perplexity
@@ -42,6 +42,26 @@ def is_pos_def(x):
         return torch.all(torch.linalg.eigvals(x) > 0).cpu().item()
     else:
         raise RuntimeError("input must be a numpy array or torch tensor")
+
+
+def create_even_device_map(model, num_hidden_layers):
+    num_devices = torch.cuda.device_count()
+    max_memory = {i: torch.cuda.mem_get_info(i)[0] // 5 for i in range(num_devices)}
+    device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=max_memory)
+    n_decoder_layers = num_hidden_layers
+    n_layers_per_device = n_decoder_layers // num_devices
+    balanced_device_map = {}
+    current_device = 0
+    current_decoder_idx = 0
+
+    for layer_name in device_map:
+        if ".layers." in layer_name:
+            if (current_decoder_idx + 1) % n_layers_per_device == 0:
+                current_device += 1
+            current_decoder_idx += 1
+        balanced_device_map[layer_name] = min(current_device, num_devices - 1)
+    device_map = balanced_device_map
+    return device_map
 
 
 class ScaleHookFactoryRxx:
@@ -130,7 +150,7 @@ class ScaleHookFactoryRxx:
         self.handles = []
 
 
-def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str]):
+def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str], batch_size: int):
     from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
     model_dtype = torch.float32
@@ -150,7 +170,8 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
     print(f"Removed layers after {max_layer_idx}. Pruned model: \n", model.model.layers)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device_map = create_device_map(model, device_map="auto-balanced")
+    device_map = create_even_device_map(model, num_hidden_layers=max_layer_idx + 1)
+    print("Device map: ", device_map)
     model = dispatch_model(model, device_map)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -174,7 +195,7 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
 
     calibration_dataloader = DataLoader(
         calibration_datamodule["train"],
-        batch_size=1,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=8,
         collate_fn=data_collator,
@@ -228,18 +249,24 @@ if __name__ == "__main__":
             "model.layers.9.mlp.gate_proj",
             "model.layers.11.mlp.down_proj",
         ],
-    )
+    ),
+    parser.add_argument("--batch_size", "-b", dest="batch_size", type=int, default=8)
 
     args = parser.parse_args()
 
     model_names = args.model_names
     layers_to_profile = args.layers_to_profile
+    batch_size = args.batch_size
     timestamp = datetime.datetime.now().strftime("%Y%-m-%d_%H-%M-%S")
     yaml_path = Path(__file__).parent.joinpath(f"sqrtm_error_vs_rxx_size_{timestamp}.yaml")
     results = []
 
     for model_name in model_names:
-        result = sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile=layers_to_profile)
+        result = sqrtm_estimated_error_vs_hidden_size(
+            model_name,
+            layers_to_profile=layers_to_profile,
+            batch_size=batch_size,
+        )
         results.append(result)
         with open(yaml_path, "w") as f:
             yaml.safe_dump(results, f)
