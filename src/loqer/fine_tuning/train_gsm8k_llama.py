@@ -881,6 +881,10 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
 
         # GSM8K Accuracy Evaluation
         model.eval()
+        # TODO: How does it even work? The model need to be still be training in the next iteration
+        # TODO: Do I have to revert the type?
+        model.bfloat16()
+        # model.to(getattr(torch, args.eval_dtype))
         gen_kwargs = {
             "max_new_tokens": args.max_target_length,
             "temperature": args.temperature,

@@ -61,7 +61,6 @@ def load_calibration_dataloader(
         torch.utils.data.DataLoader: The calibration dataloader.
 
     """
-    
     calibration_datamodule = get_data_module(
         name=calibration_set,
         tokenizer=tokenizer,
@@ -281,9 +280,11 @@ def pipeline_loqer():
         args.update(fine_tuning_config)
         for entry, value in fine_tuning_config.items():
             override_args.pop(entry, None)
+    fine_tuning_args = Namespace(**args)
 
 
     logger.info(f"Configuration: \n{pformat(config, indent=4)}")
+    logger.info(f"Fine Turning Configuration: \n{pformat(args, indent=4)}")
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
 
     model_name = config["model_name"]
@@ -340,18 +341,26 @@ def pipeline_loqer():
         else:
             raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
-    # Load model and tokenizer
+    # ====================================================================
+    # Load the base unquantised model and tokenizer for calibration
+    # ====================================================================
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
         use_fast=not args['use_slow_tokenizer'],
         trust_remote_code=args['trust_remote_code'],
         )
+    # TODO: Could I use this tokenizer padding for all datasets? 
+    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+    tokenizer.padding_side = "left"  # Allow batched inference
+    tokenizer.truncation_side = "left"
+
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
         model.tie_weights()
+    
     device_map = create_device_map(model, device_map=device_map)
     logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
@@ -365,6 +374,7 @@ def pipeline_loqer():
                 num_calibration_samples=num_calibration_samples,
                 num_workers=num_workers,
                 perplexity_eval_batch_size=perplexity_eval_batch_size,
+                args=fine_tuning_args
             )
             AB_dict, mse_df = calculate_AB_dict(
                 loqer_scaling_mode=loqer_scaling_mode,
@@ -385,11 +395,9 @@ def pipeline_loqer():
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
 
+    # ====================================================================
     # Fine-tuning
-    # TODO: not sure if this is necessary for all datasets (I copied this from the gsm8K)
-    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
-    tokenizer.padding_side = "left"  # Allow batched inference
-    tokenizer.truncation_side = "left"
+    # ====================================================================
     config = transformers.AutoConfig.from_pretrained(
         model_name,
         trust_remote_code=args['trust_remote_code'],
@@ -410,12 +418,11 @@ def pipeline_loqer():
             bnb_4bit_compute_dtype=config.torch_dtype,
         ),
     )
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     logger.info("🚀 Fine-tuning...")
-    fine_tuning_args = Namespace(**args)
     model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
     if not disable_perplexity_eval:
+        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
         logger.info("🚀 Evaluating perplexity...")
         eval_datamodule = get_data_module(
             name=perplexity_evaluation_set,
