@@ -1,4 +1,4 @@
-model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+model_name: meta-llama/Llama-2-7b-hf # TinyLlama/TinyLlama-1.1B-Chat-v1.0
 # Note that the dtype for statistic profiling is hard-coded float32,
 # since the SVD of float16 is not supported by pytorch
 loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
@@ -12,11 +12,11 @@ overwrite_output_dir: null
 
 # calibration & perplexity
 AB_dict: null
-calibration_set: "slim_pajama_6b"
+calibration_set: "gsm8k"
 num_calibration_samples: 256
 perplexity_eval_batch_size: 4
-perplexity_eval_set: "wikitext2"
-perplexity_max_seq_length: 2048
+perplexity_eval_set: "gsm8k"
+perplexity_max_seq_length: null # not used for gsm8k
 # lm-eval-harness
 lm_eval_tasks:
   [
@@ -75,7 +75,7 @@ loqer_config:
 # fine-tuning config
 fine_tuning: true
 fine_tuning_config:
-  model_name_or_path: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  model_name_or_path: meta-llama/Llama-2-7b-hf # TinyLlama/TinyLlama-1.1B-Chat-v1.0
   rank: 64 # rank for the lora adapter and this should be the same as the rank for the loqer
   # dataset
   dataset_name: gsm8k
@@ -85,15 +85,16 @@ fine_tuning_config:
   max_target_length: 256
   with_tracking: true
   report_to: tensorboard
+  eval_dtype: bfloat16
 
   ########################################
   # LoftQ Fine-tuning Config (shouldn't be changed)
-  learning_rate: 1.0e-4
+  learning_rate: 3.0e-4
   weight_decay: 0.1
   lr_scheduler_type: cosine
   num_warmup_steps: 100
   seed: 202
-  num_train_epochs: 5
+  num_train_epochs: 6
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
   gradient_accumulation_steps: 4
