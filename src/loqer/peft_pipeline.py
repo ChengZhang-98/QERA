@@ -398,8 +398,9 @@ def pipeline_loqer():
     # ====================================================================
     # Fine-tuning
     # ====================================================================
+    fine_tuning_model_name = fine_tuning_args.model_name_or_path # Note: This model name could be different from the loqer original model name because it could contains loftq initilization subfolder.
     config = transformers.AutoConfig.from_pretrained(
-        model_name,
+        fine_tuning_model_name,
         trust_remote_code=args['trust_remote_code'],
     )
     # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
@@ -407,8 +408,8 @@ def pipeline_loqer():
         if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
             raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name,
-        from_tf=bool(".ckpt" in model_name),
+        fine_tuning_model_name,
+        from_tf=bool(".ckpt" in fine_tuning_model_name),
         config=config,
         low_cpu_mem_usage=True,
         quantization_config=transformers.BitsAndBytesConfig(
