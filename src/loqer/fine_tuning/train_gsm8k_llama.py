@@ -620,10 +620,12 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         )
         model = get_peft_model(model, lora_config)
         if AB_dict is not None:
+            model = get_peft_model(model, lora_config)
             replace_lora_weights_loftq(model, AB_dict=AB_dict)
         else:
             logger.warning("AB_dict is None. The model will use the LoftQ initialization.")
-            replace_lora_weights_loftq(model)
+            model = PeftModel.from_pretrained(model, args.model_name_or_path, subfolder="loftq_init", is_trainable=True)
+            # replace_lora_weights_loftq(model) # QLORA
     else:
         model = PeftModel.from_pretrained(model, args.adapter_name_or_path, is_trainable=True)
     model.print_trainable_parameters()
@@ -883,7 +885,7 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         model.eval()
         # TODO: How does it even work? The model need to be still be training in the next iteration
         # TODO: Do I have to revert the type?
-        model.bfloat16()
+        # model.bfloat16() # This is needed for evaluating loftq
         # model.to(getattr(torch, args.eval_dtype))
         gen_kwargs = {
             "max_new_tokens": args.max_target_length,

@@ -75,7 +75,7 @@ loqer_config:
 # fine-tuning config
 fine_tuning: true
 fine_tuning_config:
-  model_name_or_path: meta-llama/Llama-2-7b-hf # TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  model_name_or_path: LoftQ/Llama-2-7b-hf-4bit-64rank # TinyLlama/TinyLlama-1.1B-Chat-v1.0
   rank: 64 # rank for the lora adapter and this should be the same as the rank for the loqer
   # dataset
   dataset_name: gsm8k
