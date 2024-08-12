@@ -49,7 +49,9 @@ def create_even_device_map(model, num_hidden_layers):
     max_memory = {i: torch.cuda.mem_get_info(i)[0] // 5 for i in range(num_devices)}
     device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=max_memory)
     n_decoder_layers = num_hidden_layers
-    n_layers_per_device = n_decoder_layers // num_devices
+    n_layers_per_device = math.floor(1 + n_decoder_layers / num_devices)
+    if n_layers_per_device == 0:
+        n_layers_per_device = 1
     balanced_device_map = {}
     current_device = 0
     current_decoder_idx = 0
@@ -236,7 +238,12 @@ if __name__ == "__main__":
         "-m",
         dest="model_names",
         nargs="+",
-        default=["Cheng98/TinyLlama_v1.1", "meta-llama/Llama-2-7b-hf", "meta-llama/Llama-2-13b-hf"],
+        default=[
+            "Cheng98/TinyLlama_v1.1",
+            "meta-llama/Llama-2-7b-hf",
+            "meta-llama/Llama-2-13b-hf",
+            "meta-llama/Llama-2-70b-hf",
+        ],
     )
     parser.add_argument(
         "--layers_to_profile",
@@ -244,9 +251,9 @@ if __name__ == "__main__":
         dest="layers_to_profile",
         nargs="+",
         default=[
-            "model.layers.3.self_attn.q_proj",
-            "model.layers.6.self_attn.o_proj",
-            "model.layers.9.mlp.gate_proj",
+            # "model.layers.3.self_attn.q_proj",
+            # "model.layers.6.self_attn.o_proj",
+            # "model.layers.9.mlp.gate_proj",
             "model.layers.11.mlp.down_proj",
         ],
     ),
