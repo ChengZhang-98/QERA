@@ -1,4 +1,3 @@
-# %%
 import sys
 from pathlib import Path
 
@@ -10,7 +9,9 @@ import logging
 import math
 import multiprocessing
 from pprint import pprint
-from functools import partial
+import re
+import time
+from copy import deepcopy
 
 import torch
 import numpy as np
@@ -18,13 +19,21 @@ from scipy import linalg as spla
 from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 import transformers
-from accelerate import dispatch_model
+from accelerate import dispatch_model, infer_auto_device_map
 from torch.utils.data import DataLoader
 from loqer.datasets import get_data_module
 from loqer.evaluate import evaluate_perplexity
 from loqer.utils import create_device_map, get_layer_by_name
 
 logger = logging.getLogger("loqer." + __name__)
+
+
+def sqrtm_scipy(A: np.ndarray, blocksize=64):
+    if not isinstance(A, np.ndarray):
+        raise RuntimeError("input matrix must be a numpy array")
+    A_sqrt, errest = spla.sqrtm(A, disp=False, blocksize=blocksize)
+    # return A_sqrt, errest
+    return dict(A_sqrt=A_sqrt, errest=errest)
 
 
 def is_pos_def(x):
@@ -36,12 +45,26 @@ def is_pos_def(x):
         raise RuntimeError("input must be a numpy array or torch tensor")
 
 
-def sqrtm_scipy(A: np.ndarray, blocksize):
-    if not isinstance(A, np.ndarray):
-        raise RuntimeError("input matrix must be a numpy array")
-    A_sqrt, errest = spla.sqrtm(A, disp=False, blocksize=blocksize)
-    # return A_sqrt, errest
-    return dict(A_sqrt=A_sqrt, errest=errest)
+def create_my_device_map(model, num_hidden_layers):
+    num_devices = torch.cuda.device_count()
+    max_memory = {i: torch.cuda.mem_get_info(i)[0] // 5 for i in range(num_devices)}
+    device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=max_memory)
+    n_decoder_layers = num_hidden_layers
+    n_layers_per_device = math.floor(1 + n_decoder_layers / num_devices)
+    if n_layers_per_device == 0:
+        n_layers_per_device = 1
+    balanced_device_map = {}
+    current_device = 0
+    current_decoder_idx = 0
+
+    for layer_name in device_map:
+        if ".layers." in layer_name:
+            if (current_decoder_idx + 1) % n_layers_per_device == 0:
+                current_device += 1
+            current_decoder_idx += 1
+        balanced_device_map[layer_name] = min(current_device, num_devices - 1)
+    device_map = balanced_device_map
+    return device_map
 
 
 class ScaleHookFactoryRxx:
@@ -50,14 +73,14 @@ class ScaleHookFactoryRxx:
     scale = E[ x^T x ] ^ 0.5, where Rxx = E[ x^T x ] is the auto-correlation matrix
     """
 
-    def __init__(self, rxx_dtype, blocksize) -> None:
+    def __init__(self, rxx_dtype) -> None:
         self.scales = {}
         self.errests = {}  # estimated error of sqrtm
+        self.is_pos_def = {}
         self.n_samples = {}
         self.compute_devices = {}
         self.sizes = {}
         self.rxx_dtype = rxx_dtype
-        self.blocksize = blocksize
         self.scale_dtype = None
         self.handles = []
 
@@ -98,6 +121,7 @@ class ScaleHookFactoryRxx:
 
     @torch.no_grad()
     def get_scale_dict(self, progress_bar=False) -> dict[str, torch.Tensor]:
+
         # convert to numpy
         for name in self.scales:
             self.scales[name] = self.scales[name].cpu().numpy()
@@ -106,10 +130,7 @@ class ScaleHookFactoryRxx:
 
         with multiprocessing.Pool(num_processes) as pool:
             with tqdm(total=len(self.scales), desc="Computing scale", disable=not progress_bar) as pbar:
-                for name, scale_and_err in zip(
-                    self.scales.keys(),
-                    pool.starmap(sqrtm_scipy, zip(self.scales.values(), [self.blocksize] * len(self.scales))),
-                ):
+                for name, scale_and_err in zip(self.scales.keys(), pool.imap(sqrtm_scipy, self.scales.values())):
                     scale = scale_and_err["A_sqrt"]
                     errest = scale_and_err["errest"]
                     self.scales[name] = scale
@@ -132,25 +153,53 @@ class ScaleHookFactoryRxx:
         self.handles = []
 
 
-def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str], block_size: int):
+def calculate_scale_dict(scales: dict[str, torch.Tensor], block_size):
+    for name in scales:
+        if isinstance(scales[name], torch.Tensor):
+            scales[name] = scales[name].cpu().numpy()
+
+    num_cores = multiprocessing.cpu_count()
+    num_processes = max(1, num_cores // 64)
+
+    sqrtm_scipy_partial = lambda x: sqrtm_scipy(x, blocksize=block_size)
+    errests = {}
+
+    with multiprocessing.Pool(num_processes) as pool:
+        with tqdm(total=len(scales), desc="Computing scale") as pbar:
+            for name, scale_and_err in zip(scales.keys(), pool.imap(sqrtm_scipy_partial, scales.values())):
+                errest = scale_and_err["errest"]
+                errests[name] = errest.item()
+                pbar.update()
+
+    return errests
+
+
+def sqrtm_estimated_error_vs_hidden_size(
+    model_name, layers_to_profile: list[str], batch_size: int, block_sizes: list[int]
+):
     from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
     model_dtype = torch.float32
-    num_calibration_samples = 64
+    num_calibration_samples = 256
     rxx_dtype = torch.float64
 
-    hook_factory = ScaleHookFactoryRxx(rxx_dtype=rxx_dtype, blocksize=block_size)
+    hook_factory = ScaleHookFactoryRxx(rxx_dtype=rxx_dtype)
     # only supports llama model
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=model_dtype, _attn_implementation="eager"
     )
+    assert isinstance(model, LlamaForCausalLM)
     model.eval()
+    max_layer_idx = max([int(re.search(r"\d+", layer_name).group()) for layer_name in layers_to_profile])
+    # remove the layers after the last layer to profile
+    model.model.layers = model.model.layers[: max_layer_idx + 1]
+    print(f"Removed layers after {max_layer_idx}. Pruned model: \n", model.model.layers)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device_map = create_device_map(model, device_map="auto-balanced")
+    device_map = create_my_device_map(model, num_hidden_layers=max_layer_idx + 1)
+    print("Device map: ", device_map)
     model = dispatch_model(model, device_map)
 
-    assert isinstance(model, LlamaForCausalLM)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
@@ -172,7 +221,7 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
 
     calibration_dataloader = DataLoader(
         calibration_datamodule["train"],
-        batch_size=1,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=8,
         collate_fn=data_collator,
@@ -187,14 +236,23 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
     )
     del model
 
-    _ = hook_factory.get_scale_dict(progress_bar=True)
+    errests = []
+    elapse_times = []
+    for block_size in block_sizes:
+        start = time.time()
+        errest = calculate_scale_dict(hook_factory.scales, block_size=block_size)
+        end = time.time()
+        errests.append(errest)
+        # record the time in ms
+        elapse_times.append((end - start) * 1000)
+
     hook_factory.remove_all_hooks()
     sqrtm_result_profile = dict(
         model_name=model_name,
         profiled_layers=layers_to_profile,
-        sqrtm_block_size=block_size,
-        errests=list(hook_factory.errests.values()),
-        sizes=list(hook_factory.sizes.values()),
+        block_sizes=deepcopy(block_sizes),
+        errests=errests,
+        rxx_sizes=list(hook_factory.sizes.values()),
     )
     return sqrtm_result_profile
 
@@ -209,10 +267,16 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument(
-        "--model_name",
+        "--model_names",
         "-m",
-        dest="model_name",
-        default="meta-llama/Llama-2-7b-hf",
+        dest="model_names",
+        nargs="+",
+        default=[
+            "Cheng98/TinyLlama_v1.1",
+            "meta-llama/Llama-2-7b-hf",
+            "meta-llama/Llama-2-13b-hf",
+            "meta-llama/Llama-2-70b-hf",
+        ],
     )
     parser.add_argument(
         "--layers_to_profile",
@@ -220,34 +284,32 @@ if __name__ == "__main__":
         dest="layers_to_profile",
         nargs="+",
         default=[
-            "model.layers.3.self_attn.q_proj",
-            "model.layers.9.mlp.gate_proj",
-            "model.layers.18.mlp.down_proj",
+            # "model.layers.3.self_attn.q_proj",
+            # "model.layers.6.self_attn.o_proj",
+            # "model.layers.9.mlp.gate_proj",
+            "model.layers.11.mlp.down_proj",
         ],
-    )
-    parser.add_argument(
-        "--blocksizes",
-        "-b",
-        dest="blocksizes",
-        type=int,
-        nargs="+",
-        default=[16, 32, 64, 128, 256, 512],
-    )
+    ),
+    parser.add_argument("--batch_size", "-b", dest="batch_size", type=int, default=8)
+    parser.add_argument("--block_sizes", "-s", dest="block_sizes", nargs="+", type=int, default=[16, 64])
 
     args = parser.parse_args()
 
-    model_name = args.model_name
+    model_names = args.model_names
     layers_to_profile = args.layers_to_profile
-    block_sizes = args.blocksizes
+    batch_size = args.batch_size
     timestamp = datetime.datetime.now().strftime("%Y%-m-%d_%H-%M-%S")
     yaml_path = Path(__file__).parent.joinpath(f"sqrtm_error_vs_rxx_size_{timestamp}.yaml")
     results = []
 
-    for block_size in block_sizes:
+    for model_name in model_names:
         result = sqrtm_estimated_error_vs_hidden_size(
-            model_name, layers_to_profile=layers_to_profile, block_size=block_size
+            model_name,
+            layers_to_profile=layers_to_profile,
+            batch_size=batch_size,
+            block_sizes=args.block_sizes,
         )
         results.append(result)
         with open(yaml_path, "w") as f:
-            yaml.dump(results, f)
+            yaml.safe_dump(results, f)
         pprint(result, sort_dicts=False)

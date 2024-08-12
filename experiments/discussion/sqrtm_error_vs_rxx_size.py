@@ -1,4 +1,3 @@
-# %%
 import sys
 from pathlib import Path
 
@@ -27,7 +26,7 @@ from loqer.utils import create_device_map, get_layer_by_name
 logger = logging.getLogger("loqer." + __name__)
 
 
-def sqrtm_scipy(A: np.ndarray, blocksize=64):
+def sqrtm_scipy(A: np.ndarray, blocksize):
     if not isinstance(A, np.ndarray):
         raise RuntimeError("input matrix must be a numpy array")
     A_sqrt, errest = spla.sqrtm(A, disp=False, blocksize=blocksize)
@@ -278,8 +277,3 @@ if __name__ == "__main__":
         with open(yaml_path, "w") as f:
             yaml.safe_dump(results, f)
         pprint(result, sort_dicts=False)
-
-
-# %% [markdown]
-# | Model | Rxx accumulation | Sqrtm success? |  Runtime (s) | Memory (GB) |  Notes |
-# |---|---|---|---|---|---|---|
