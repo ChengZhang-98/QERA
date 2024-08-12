@@ -12,6 +12,7 @@ from pprint import pprint
 import re
 import time
 from copy import deepcopy
+from functools import partial
 
 import torch
 import numpy as np
@@ -161,7 +162,7 @@ def calculate_scale_dict(scales: dict[str, torch.Tensor], block_size):
     num_cores = multiprocessing.cpu_count()
     num_processes = max(1, num_cores // 64)
 
-    sqrtm_scipy_partial = lambda x: sqrtm_scipy(x, blocksize=block_size)
+    sqrtm_scipy_partial = partial(sqrtm_scipy, blocksize=block_size)
     errests = {}
 
     with multiprocessing.Pool(num_processes) as pool:
@@ -291,7 +292,7 @@ if __name__ == "__main__":
         ],
     ),
     parser.add_argument("--batch_size", "-b", dest="batch_size", type=int, default=8)
-    parser.add_argument("--block_sizes", "-s", dest="block_sizes", nargs="+", type=int, default=[16, 64])
+    parser.add_argument("--block_sizes", "-s", dest="block_sizes", nargs="+", type=int, default=[64, 256])
 
     args = parser.parse_args()
 
@@ -299,7 +300,7 @@ if __name__ == "__main__":
     layers_to_profile = args.layers_to_profile
     batch_size = args.batch_size
     timestamp = datetime.datetime.now().strftime("%Y%-m-%d_%H-%M-%S")
-    yaml_path = Path(__file__).parent.joinpath(f"sqrtm_error_vs_rxx_size_{timestamp}.yaml")
+    yaml_path = Path(__file__).parent.joinpath(f"sqrtm_error_vs_block_size_{timestamp}.yaml")
     results = []
 
     for model_name in model_names:
