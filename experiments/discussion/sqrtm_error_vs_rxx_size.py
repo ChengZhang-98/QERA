@@ -44,7 +44,7 @@ def is_pos_def(x):
         raise RuntimeError("input must be a numpy array or torch tensor")
 
 
-def create_even_device_map(model, num_hidden_layers):
+def create_my_device_map(model, num_hidden_layers):
     num_devices = torch.cuda.device_count()
     max_memory = {i: torch.cuda.mem_get_info(i)[0] // 5 for i in range(num_devices)}
     device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=max_memory)
@@ -172,7 +172,7 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
     print(f"Removed layers after {max_layer_idx}. Pruned model: \n", model.model.layers)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device_map = create_even_device_map(model, num_hidden_layers=max_layer_idx + 1)
+    device_map = create_my_device_map(model, num_hidden_layers=max_layer_idx + 1)
     print("Device map: ", device_map)
     model = dispatch_model(model, device_map)
 
