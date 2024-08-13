@@ -23,6 +23,7 @@ handler.setFormatter(formatter)
 root_logger = logging.getLogger("loqer")
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
+root_logger.propagate = False
 
 
 def set_logging_verbosity(level: str = "info"):
