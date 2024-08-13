@@ -53,7 +53,7 @@ def calculate_AB_dict(
     loqer_sqrtm_num_iters,
     loqer_config,
     AB_dict=None,
-    ):
+):
     """
     Calculates the A and B dictionaries for Loqer-based quantization.
 
@@ -143,9 +143,10 @@ def calculate_AB_dict(
     mse_df_emoji = mse_df.copy()
     mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
     logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
-    
+
     return AB_dict, mse_df
     # logger.info(f"Model after approximation: \n{model}")
+
 
 def pipeline_loqer():
     parser = ArgumentParser()
@@ -240,7 +241,7 @@ def pipeline_loqer():
             config[entry] = value
             override_args[entry] = value
 
-    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments... 
+    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments...
     # (because there are many default values in the command line arguments)
     if "fine_tuning_config" in config:
         fine_tuning_config = config.pop("fine_tuning_config")
@@ -248,7 +249,6 @@ def pipeline_loqer():
         args.update(fine_tuning_config)
         for entry, value in fine_tuning_config.items():
             override_args.pop(entry, None)
-
 
     logger.info(f"Configuration: \n{pformat(config, indent=4)}")
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
@@ -310,9 +310,9 @@ def pipeline_loqer():
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
-        use_fast=not args['use_slow_tokenizer'],
-        trust_remote_code=args['trust_remote_code'],
-        )
+        use_fast=not args["use_slow_tokenizer"],
+        trust_remote_code=args["trust_remote_code"],
+    )
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
     )
@@ -356,11 +356,17 @@ def pipeline_loqer():
     tokenizer.truncation_side = "left"
     config = transformers.AutoConfig.from_pretrained(
         model_name,
-        trust_remote_code=args['trust_remote_code'],
+        trust_remote_code=args["trust_remote_code"],
     )
     # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
-    if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat' and loqer_config['default-1']['w_quantizer']['name'] != 'bfloat':
-        if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
+    if (
+        loqer_config["default-1"]["w_quantizer"]["name"] != "normalfloat"
+        and loqer_config["default-1"]["w_quantizer"]["name"] != "bfloat"
+    ):
+        if (
+            loqer_config["default-1"]["w_quantizer"]["width"] != 4
+            and loqer_config["default-1"]["w_quantizer"]["num_bits"] != 4
+        ):
             raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name,
@@ -377,7 +383,7 @@ def pipeline_loqer():
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     logger.info("🚀 Fine-tuning...")
     fine_tuning_args = Namespace(**args)
-    model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
+    model = loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -420,10 +426,10 @@ def pipeline_loqer():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -533,6 +539,7 @@ def pipeline_fp16():
     model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
     model.eval()
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -552,7 +559,6 @@ def pipeline_fp16():
             collate_fn=data_collator,
         )
 
-        model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
         perplexity_results = evaluate_perplexity(
             model=model,
             eval_dataloader=perplexity_dataloader,
@@ -570,10 +576,10 @@ def pipeline_fp16():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -597,6 +603,7 @@ def pipeline_fp16():
 def pipeline_q_baseline():
     from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
     from auto_gptq import exllama_set_max_input_length
+
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
     parser.add_argument("--load-in-4bit", dest="load_in_4bit", action="store_true", help="Load in 4-bit model")
@@ -732,10 +739,10 @@ def pipeline_q_baseline():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -795,27 +802,28 @@ def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag
 
 
 def calculate_chunk_AB_Dict(
-        model_name, 
-        loqer_dtype, 
-        num_chunks, 
-        disable_loqer, 
-        loqer_scaling_mode, 
-        loqer_sqrtm_implementation, 
-        loqer_sqrtm_num_iters, 
-        loqer_config,
-        loqer_scaling_mode_map,
-        calibration_set,
-        perplexity_max_seq_length,
-        num_calibration_samples,
-        num_workers,
-        perplexity_eval_batch_size,
-        AB_dict_dir,
-        output_dir,
-        chunk_tag,
-        missing_chunks,
-        config,
-        device_map,
-        chunk_id=None):
+    model_name,
+    loqer_dtype,
+    num_chunks,
+    disable_loqer,
+    loqer_scaling_mode,
+    loqer_sqrtm_implementation,
+    loqer_sqrtm_num_iters,
+    loqer_config,
+    loqer_scaling_mode_map,
+    calibration_set,
+    perplexity_max_seq_length,
+    num_calibration_samples,
+    num_workers,
+    perplexity_eval_batch_size,
+    AB_dict_dir,
+    output_dir,
+    chunk_tag,
+    missing_chunks,
+    config,
+    device_map,
+    chunk_id=None,
+):
     """
     Calculates the A and B dictionaries for a given chunk in the LoQER pipeline.
 
@@ -853,7 +861,9 @@ def calculate_chunk_AB_Dict(
         raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
     else:
         if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity", "lqer"]:
-            raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']")
+            raise ValueError(
+                "loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']"
+            )
 
     # sqrtm_implementation
     if loqer_scaling_mode in ["rxx", "mixed"]:
@@ -949,9 +959,7 @@ def calculate_chunk_AB_Dict(
     mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
     logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
 
-    missing_chunks = _verify_AB_dict_chunks(
-        AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=chunk_tag
-    )
+    missing_chunks = _verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=chunk_tag)
 
     # save this chunk
     mse_df_dir = output_dir.joinpath("approximation_error")
@@ -1062,7 +1070,7 @@ def pipeline_loqer_chunked():
             config[entry] = value
             override_args[entry] = value
 
-    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments... 
+    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments...
     # (because there are many default values in the command line arguments)
     if "fine_tuning_config" in config:
         fine_tuning_config = config.pop("fine_tuning_config")
@@ -1144,14 +1152,16 @@ def pipeline_loqer_chunked():
     if chunk_id is None:
         if len(missing_chunks) > 0:
             logger.info(f"Missing chunks: \n{pformat(missing_chunks)}")
-            raise ValueError("Can't load the AB_dict to perform fine-tuning. Missing chunks. Please provide chunk_id to calculate the AB_dict.")
+            raise ValueError(
+                "Can't load the AB_dict to perform fine-tuning. Missing chunks. Please provide chunk_id to calculate the AB_dict."
+            )
         else:
             logger.info(f"🔊 All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning.")
             # # Load model and tokenizer
             tokenizer = transformers.AutoTokenizer.from_pretrained(
                 model_name,
-                use_fast=not args['use_slow_tokenizer'],
-                trust_remote_code=args['trust_remote_code'],
+                use_fast=not args["use_slow_tokenizer"],
+                trust_remote_code=args["trust_remote_code"],
             )
             # TODO: not sure if this is necessary for all datasets (I copied this from the gsm8K)
             tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
@@ -1160,11 +1170,17 @@ def pipeline_loqer_chunked():
 
             config = transformers.AutoConfig.from_pretrained(
                 model_name,
-                trust_remote_code=args['trust_remote_code'],
+                trust_remote_code=args["trust_remote_code"],
             )
             # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
-            if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat' and loqer_config['default-1']['w_quantizer']['name'] != 'bfloat':
-                if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
+            if (
+                loqer_config["default-1"]["w_quantizer"]["name"] != "normalfloat"
+                and loqer_config["default-1"]["w_quantizer"]["name"] != "bfloat"
+            ):
+                if (
+                    loqer_config["default-1"]["w_quantizer"]["width"] != 4
+                    and loqer_config["default-1"]["w_quantizer"]["num_bits"] != 4
+                ):
                     raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
             model = transformers.AutoModelForCausalLM.from_pretrained(
                 model_name,
@@ -1185,10 +1201,10 @@ def pipeline_loqer_chunked():
             AB_dict_chunks = list(filter(lambda x: x.is_file() and x.name.endswith(".pt"), AB_dict_dir.iterdir()))
             for chunk in tqdm(AB_dict_chunks, desc="Loading chunks"):
                 AB_dict.update(torch.load(chunk))
-            
+
             logger.info("🚀 Fine-tuning...")
             fine_tuning_args = Namespace(**args)
-            model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
+            model = loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
             # evaluate
             if not disable_perplexity_eval:
@@ -1234,10 +1250,10 @@ def pipeline_loqer_chunked():
                     model,
                     tasks=lm_eval_tasks,
                     num_fewshot=lm_eval_num_fewshot,
-                    no_cache=True,
+                    use_cache=None,
                     batch_size=lm_eval_batch_size,
                 )
-                logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+                logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
             # save perplexity results
             if not disable_perplexity_eval:
