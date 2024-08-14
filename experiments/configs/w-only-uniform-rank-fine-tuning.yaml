@@ -75,7 +75,7 @@ loqer_config:
 # fine-tuning config
 fine_tuning: true
 fine_tuning_config:
-  model_name_or_path: LoftQ/Llama-2-7b-hf-4bit-64rank # TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  model_name_or_path: meta-llama/Llama-2-7b-hf # TinyLlama/TinyLlama-1.1B-Chat-v1.0
   rank: 64 # rank for the lora adapter and this should be the same as the rank for the loqer
   # dataset
   dataset_name: gsm8k
@@ -83,7 +83,7 @@ fine_tuning_config:
   pad_to_max_length: true
   max_source_length: 128
   max_target_length: 256
-  with_tracking: true
+  with_tracking: false
   report_to: tensorboard
   eval_dtype: bfloat16
 
@@ -93,7 +93,7 @@ fine_tuning_config:
   weight_decay: 0.1
   lr_scheduler_type: cosine
   num_warmup_steps: 100
-  seed: 202
+  seed: 11
   num_train_epochs: 6
   per_device_train_batch_size: 4
   per_device_eval_batch_size: 4
