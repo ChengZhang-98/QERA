@@ -420,10 +420,10 @@ def pipeline_loqer():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -570,10 +570,10 @@ def pipeline_fp16():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -732,10 +732,10 @@ def pipeline_q_baseline():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -1234,10 +1234,10 @@ def pipeline_loqer_chunked():
                     model,
                     tasks=lm_eval_tasks,
                     num_fewshot=lm_eval_num_fewshot,
-                    no_cache=True,
+                    use_cache=None,
                     batch_size=lm_eval_batch_size,
                 )
-                logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+                logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
             # save perplexity results
             if not disable_perplexity_eval:

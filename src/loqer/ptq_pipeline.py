@@ -314,10 +314,10 @@ def pipeline_loqer():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -347,7 +347,7 @@ def pipeline_loqer():
             yaml.dump(config, f)
 
 
-def pipeline_fp16():
+def pipeline_fp16_bf16_fp32():
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
     parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
@@ -427,6 +427,7 @@ def pipeline_fp16():
     model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
     model.eval()
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -446,7 +447,6 @@ def pipeline_fp16():
             collate_fn=data_collator,
         )
 
-        model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
         perplexity_results = evaluate_perplexity(
             model=model,
             eval_dataloader=perplexity_dataloader,
@@ -464,10 +464,10 @@ def pipeline_fp16():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -491,6 +491,7 @@ def pipeline_fp16():
 def pipeline_q_baseline():
     from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
     from auto_gptq import exllama_set_max_input_length
+
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
     parser.add_argument("--load-in-4bit", dest="load_in_4bit", action="store_true", help="Load in 4-bit model")
@@ -626,10 +627,10 @@ def pipeline_q_baseline():
             model,
             tasks=lm_eval_tasks,
             num_fewshot=lm_eval_num_fewshot,
-            no_cache=True,
+            use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -828,7 +829,9 @@ def pipeline_loqer_chunked():
             raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
         else:
             if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity", "lqer"]:
-                raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']")
+                raise ValueError(
+                    "loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']"
+                )
 
         # sqrtm_implementation
         if loqer_scaling_mode in ["rxx", "mixed"]:
@@ -963,7 +966,7 @@ def pipeline_loqer_chunked():
         AB_dict_chunks = list(filter(lambda x: x.is_file() and x.name.endswith(".pt"), AB_dict_dir.iterdir()))
         for chunk in tqdm(AB_dict_chunks, desc="Loading chunks"):
             AB_dict.update(torch.load(chunk))
-                
+
         # attach A & B
         layers_to_approximate = find_layers_to_approximate(model)
         attach_AB(model, layers_to_approximate, AB_dict)
@@ -1012,10 +1015,10 @@ def pipeline_loqer_chunked():
                 model,
                 tasks=lm_eval_tasks,
                 num_fewshot=lm_eval_num_fewshot,
-                no_cache=True,
+                use_cache=None,
                 batch_size=lm_eval_batch_size,
             )
-            logger.info(f"Downstream task results: \n{pformat(lm_eval_results)}")
+            logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
 
         # save perplexity results
         if not disable_perplexity_eval:

@@ -11,6 +11,7 @@ ipdb
 pudb
 nvitop
 sentencepiece
+evaluate
 # lm-eval-harness
 einops
 jsonlines
@@ -28,6 +29,9 @@ sqlitedict
 tqdm-multiprocess
 zstandard
 bitsandbytes==0.43.2
+dill
+word2number
+more_itertools
 # plot
 matplotlib
 seaborn
