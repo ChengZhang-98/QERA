@@ -217,7 +217,7 @@ def replace_lora_weights_loftq(
     safetensor_loader = _SafetensorLoader(peft_model, model_path)
 
     # if too slow, consider adding tqdm as an option
-    for name, module in peft_model.named_modules():
+    for name, module in tqdm(peft_model.named_modules(), desc="Computing low-rank A and B from scale"):
         if not isinstance(module, Linear4bit):
             continue
 
