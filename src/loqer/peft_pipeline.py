@@ -163,20 +163,28 @@ def calculate_AB_dict(
     share_scales(scale_dict, layers_to_register_and_share)
     logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
-    logger.info("🚀 Quantizing model...")
-    quantize_model(model, loqer_config)
+    debug = False
+    if debug:
+        logger.info("🚀 Quantizing model...")
+        quantize_model(model, loqer_config)
 
-    layers_to_approximate = find_layers_to_approximate(model)
-    logger.info("🚀 Loqer is enabled. Computing A & B...")
-    AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+        layers_to_approximate = find_layers_to_approximate(model)
+        logger.info("🚀 Loqer is enabled. Computing A & B...")
+        AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+        del scale_dict
+        attach_AB(model, layers_to_approximate, AB_dict)
+        mse_df_emoji = mse_df.copy()
+        mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
+        logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
+
+        return AB_dict, mse_df
+
+    scale_dict_rename = {} # add .scale to the layer name
+    for layer_name, scale in scale_dict.items():
+        scale_dict_rename[layer_name + ".scale"] = scale
     del scale_dict
-    attach_AB(model, layers_to_approximate, AB_dict)
-    mse_df_emoji = mse_df.copy()
-    mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
-    logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
-    
-    return AB_dict, mse_df
-    # logger.info(f"Model after approximation: \n{model}")
+
+    return scale_dict_rename, 0.0 # name without .scale
 
 
 def pipeline_loqer():
