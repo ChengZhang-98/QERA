@@ -33,6 +33,7 @@ def evaluate_harness_downstream(
     torch_random_seed: int = 1234,
     fewshot_random_seed: int = 1234,
 ):
+    model.eval()
     model = HFLM(model)
     results = _simple_evaluate(
         model,
