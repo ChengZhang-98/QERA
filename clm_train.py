@@ -55,8 +55,6 @@ from transformers import (
     default_data_collator,
     get_scheduler,
 )
-from transformers.utils import check_min_version, send_example_telemetry
-from transformers.utils.versions import require_version
 
 
 logger = get_logger(__name__)
@@ -412,7 +410,10 @@ def main():
         )
 
     # *: create bnb model or un-quantized model
+    # *: hard coded bfloat16
+    model_form_info = ""
     if args.model_name_or_path:
+        model_form_info += f"pretrained, "
         if args.bnb_config_yaml:
             with open(args.bnb_config_yaml, "r") as f:
                 bnb_config_dict = yaml.safe_load(f)
@@ -420,9 +421,11 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name_or_path,
                 quantization_config=bnb_config,
+                torch_dtype=torch.bfloat16,
             )
             model = prepare_model_for_kbit_training(model)
             logger.info(f"🔍 Loaded model with BitsAndBytesConfig:\n{bnb_config}")
+            model_form_info += f"bnb, "
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 args.model_name_or_path,
@@ -430,10 +433,15 @@ def main():
                 config=config,
                 low_cpu_mem_usage=args.low_cpu_mem_usage,
                 trust_remote_code=args.trust_remote_code,
+                torch_dtype=torch.bfloat16,
             )
+            model_form_info += f"un-quantized, "
     else:
+        model_form_info += f"train from scratch, "
         logger.info("Training new model from scratch")
-        model = AutoModelForCausalLM.from_config(config, trust_remote_code=args.trust_remote_code)
+        model = AutoModelForCausalLM.from_config(
+            config, trust_remote_code=args.trust_remote_code, torch_dtype=torch.bfloat16
+        )
 
     # *: Load the adapter
     lora_adapter_dir = Path(args.lora_adapter_dir) if args.lora_adapter_dir else None
@@ -444,6 +452,9 @@ def main():
         logger.info(
             f"🔍 trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}"
         )
+        model_form_info += f"lora_adapter ({lora_adapter_dir.as_posix()}), "
+
+    logger.info(f"🔍 Model form: {model_form_info}")
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
