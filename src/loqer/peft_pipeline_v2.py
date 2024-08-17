@@ -6,21 +6,16 @@ from pprint import pformat
 import shutil
 import time
 
-import tqdm
 import torch
 from torch.utils.data import DataLoader
 import transformers
 from transformers import BitsAndBytesConfig
-import bitsandbytes as bnb
 from peft import get_peft_model, LoraConfig
-from peft.utils.loftq_utils import is_bnb_4bit_available, _SafetensorLoader
-from peft.utils.loftq_utils import _low_rank_decomposition as _low_rank_decomposition_loftq
-from peft.tuners.lora import Linear4bit
 from peft import TaskType
 from accelerate import dispatch_model
 
 from loqer.datasets import get_data_module
-from loqer.models import find_layers_to_approximate, find_layers_to_register_scale_hook
+from loqer.models import find_layers_to_register_scale_hook
 from loqer.statistic_profiler import register_scale_hooks, share_scales
 from loqer.evaluate import evaluate_perplexity
 from loqer.fine_tuning import replace_lora_weights_loftq, replace_lora_weights_loqer
