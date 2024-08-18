@@ -6,6 +6,7 @@ from .gsm8k import preprocess_data_module_gsm8k, get_raw_data_module_gsm8k
 from .wikitext2 import get_raw_data_module_wikitext2, preprocess_data_module_wikitext2
 from .slim_pajama import get_raw_data_module_slim_pajama_6b, preprocess_data_module_slim_pajama_6b
 from .wikitext2_peft import get_raw_data_module_wikitext2_peft, preprocess_data_module_wikitext2_peft
+from .slim_pajama_6b_peft import get_raw_data_module_slimpajama_6b_peft, preprocess_data_module_slimpajama_6b_peft
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,8 @@ def get_raw_data_module(name: str) -> hf_datasets.DatasetDict:
             return get_raw_data_module_gsm8k()
         case "wikitext2_peft":
             return get_raw_data_module_wikitext2_peft()
+        case "slim_pajama_6b_peft":
+            return get_raw_data_module_slimpajama_6b_peft()
         case _:
             raise ValueError(f"task {name} not supported")
 
@@ -27,6 +30,7 @@ def get_raw_data_module(name: str) -> hf_datasets.DatasetDict:
 def preprocess_data_module(
     raw_dataset_dict, name: str, tokenizer, padding, max_length, num_proc: int = 8, args: Namespace = None
 ) -> hf_datasets.DatasetDict:
+    """Preprocess for PTQ evaluation"""
     match name:
         case "wikitext2":
             return preprocess_data_module_wikitext2(
@@ -94,9 +98,18 @@ def preprocess_data_module_for_peft(
     num_proc: int,
     overwrite_cache: bool = False,
 ) -> hf_datasets.DatasetDict:
+    """Preprocess for PEFT training/evaluation"""
     match name:
         case "wikitext2_peft":
             return preprocess_data_module_wikitext2_peft(
+                raw_dataset_dict,
+                tokenizer=tokenizer,
+                max_length=max_length,
+                num_proc=num_proc,
+                overwrite_cache=overwrite_cache,
+            )
+        case "slim_pajama_6b_peft":
+            return preprocess_data_module_slimpajama_6b_peft(
                 raw_dataset_dict,
                 tokenizer=tokenizer,
                 max_length=max_length,

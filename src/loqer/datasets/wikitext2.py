@@ -2,7 +2,7 @@ import datasets as hf_datasets
 
 
 def get_raw_data_module_wikitext2() -> hf_datasets.DatasetDict:
-    dataset_dict = hf_datasets.load_dataset("wikitext", "wikitext-2-raw-v1")
+    dataset_dict = hf_datasets.load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1")
     return dataset_dict
 
 

@@ -2,12 +2,12 @@ from itertools import chain
 import datasets as hf_datasets
 
 
-def get_raw_data_module_wikitext2_peft() -> hf_datasets.DatasetDict:
-    dataset_dict = hf_datasets.load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1")
+def get_raw_data_module_slimpajama_6b_peft() -> hf_datasets.DatasetDict:
+    dataset_dict = hf_datasets.load_dataset("DKYoon/SlimPajama-6B")
     return dataset_dict
 
 
-def preprocess_data_module_wikitext2_peft(
+def preprocess_data_module_slimpajama_6b_peft(
     raw_dataset_dict,
     tokenizer,
     max_length: int,  # block_size
