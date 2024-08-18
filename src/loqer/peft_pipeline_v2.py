@@ -108,7 +108,6 @@ def adapt_and_save_clm_model(
             loqer_calibration_set,
             tokenizer=tokenizer,
             max_length=loqer_max_seq_length,
-            num_raw_samples=loqer_num_calibration_samples * 30,
             num_workers=num_workers,
             overwrite_cache=overwrite_dataset_cache,
         )
@@ -148,13 +147,19 @@ def adapt_and_save_clm_model(
         # lora
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path)
     model.eval()
+    lora_target_modules_ = lora_target_modules
+    # fmt: off
+    if isinstance(lora_target_modules, (list, tuple)) and len(lora_target_modules) == 1 and lora_target_modules[0] == "all-linear":
+        lora_target_modules_ = "all-linear"
+    # fmt: on
+
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
         inference_mode=True,
         r=lora_rank,
         lora_alpha=lora_alpha,
         lora_dropout=0.1,
-        target_modules=lora_target_modules,
+        target_modules=lora_target_modules_,
         init_lora_weights=True,
     )
     peft_model = get_peft_model(model, lora_config)
@@ -243,7 +248,7 @@ def adapt_and_save_pipeline():
     parser.add_argument("--bnb-quant-type", type=str, default="nf4", help="Default: nf4", choices=["nf4", "fp4"])
     parser.add_argument("--bnb-n-bits", type=int, default=4, help="Default: 4", choices=[2, 4])
     parser.add_argument("--lora-rank", type=int, default=64, help="Default: 64")
-    parser.add_argument("--lora-alpha", type=float, default=16.0, help="Default: 16.0")
+    parser.add_argument("--lora-alpha", type=float, default=128.0, help="Default: 128.0")
     parser.add_argument(
         "--lora-target-modules",
         type=str,
@@ -257,6 +262,7 @@ def adapt_and_save_pipeline():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overwrite-dataset-cache", action="store_true")
     args = parser.parse_args()
+    logger.info(f"Arguments\n{pformat(vars(args), sort_dicts=True)}")
     transformers.set_seed(args.seed)
 
     if args.model_type == "clm":

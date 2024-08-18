@@ -235,16 +235,10 @@ def parse_args():
         ),
     )
     # *: custom arguments for peft
-    parser.add_argument(
-        "--lora-adapter-dir",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--bnb-config-yaml",
-        type=str,
-        default=None,
-    )
+    parser.add_argument("--lora-adapter-dir", type=str, default=None)
+    parser.add_argument("--bnb-config-yaml", type=str, default=None)
+    parser.add_argument("--run-name", type=str, default=None)
+    parser.add_argument("--use-gradient-checkpointing", action="store_true", default=False)
     args = parser.parse_args()
 
     # Sanity checks
@@ -423,7 +417,11 @@ def main():
                 quantization_config=bnb_config,
                 torch_dtype=torch.bfloat16,
             )
-            model = prepare_model_for_kbit_training(model)
+            model = prepare_model_for_kbit_training(
+                model,
+                use_gradient_checkpointing=args.use_gradient_checkpointing,
+                gradient_checkpointing_kwargs={"use_reentrant": True},  # *: to avoid warning
+            )
             logger.info(f"🔍 Loaded model with BitsAndBytesConfig:\n{bnb_config}")
             model_form_info += f"bnb, "
         else:
@@ -530,10 +528,11 @@ def main():
 
     train_dataset = lm_datasets["train"]
     eval_dataset = lm_datasets["validation"]
+    test_dataset = lm_datasets["test"] if "test" in lm_datasets.keys() else None
 
-    # Log a few random samples from the training set:
-    for index in random.sample(range(len(train_dataset)), 2):
-        logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
+    # # Log a few random samples from the training set:
+    # for index in random.sample(range(len(train_dataset)), 2):
+    #     logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     train_dataloader = DataLoader(
@@ -542,19 +541,28 @@ def main():
     eval_dataloader = DataLoader(
         eval_dataset, collate_fn=default_data_collator, batch_size=args.per_device_eval_batch_size
     )
+    test_dataloader = None
+    if test_dataset is not None:
+        test_dataloader = DataLoader(
+            test_dataset, collate_fn=default_data_collator, batch_size=args.per_device_eval_batch_size
+        )
 
     # Optimizer
     # Split weights in two groups, one with weight decay and the other not.
     no_decay = ["bias", "layer_norm.weight"]
     params_with_weight_decay = []
+    param_names_with_weight_decay = []
     params_without_weight_decay = []
+    params_without_weight_decay_names = []
     for n, p in model.named_parameters():
         if not p.requires_grad:
             continue
         if any(nd in n for nd in no_decay):
             params_without_weight_decay.append(p)
+            params_without_weight_decay_names.append(n)
         else:
-            params_with_weight_decay
+            params_with_weight_decay.append(p)
+            param_names_with_weight_decay.append(n)
 
     optimizer_grouped_parameters = [
         {
@@ -566,6 +574,8 @@ def main():
             "weight_decay": 0.0,
         },
     ]
+    logger.info(f"Parameters with weight decay: {param_names_with_weight_decay}")
+    logger.info(f"Parameters without weight decay: {params_without_weight_decay_names}")
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate)
 
     # Scheduler and math around the number of training steps.
@@ -588,9 +598,11 @@ def main():
     model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
     )
+    if test_dataloader is not None:
+        test_dataloader = accelerator.prepare(test_dataloader)
 
     # On TPU, the tie weights in our model have been disconnected, so we need to restore the ties.
-    if accelerator.distributed_type == DistributedType.TPU:
+    if accelerator.distributed_type == DistributedType.XLA:
         model.tie_weights()
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -611,7 +623,10 @@ def main():
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
         experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
-        accelerator.init_trackers("clm_no_trainer", experiment_config)
+        tracker_init_kwargs = {}
+        if args.run_name is not None:
+            tracker_init_kwargs = {"wandb": {"name": args.run_name}}
+        accelerator.init_trackers("clm_no_trainer", experiment_config, tracker_init_kwargs)
 
     # Train!
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -680,6 +695,9 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+                # keep track of step loss
+                if args.with_tracking:
+                    accelerator.log({"train_step_loss": loss.detach().float()}, step=completed_steps)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -695,6 +713,7 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
+        # validation set
         model.eval()
         losses = []
         for step, batch in enumerate(eval_dataloader):
@@ -711,12 +730,12 @@ def main():
         except OverflowError:
             perplexity = float("inf")
 
-        logger.info(f"epoch {epoch}: perplexity: {perplexity} eval_loss: {eval_loss}")
+        logger.info(f"epoch {epoch}: eval_perplexity: {perplexity} eval_loss: {eval_loss}")
 
         if args.with_tracking:
             accelerator.log(
                 {
-                    "perplexity": perplexity,
+                    "eval_perplexity": perplexity,
                     "eval_loss": eval_loss,
                     "train_loss": total_loss.item() / len(train_dataloader),
                     "epoch": epoch,
@@ -724,6 +743,27 @@ def main():
                 },
                 step=completed_steps,
             )
+
+        # test set
+        if test_dataloader is not None:
+            model.eval()
+            losses = []
+            for step, batch in enumerate(test_dataloader):
+                with torch.no_grad():
+                    outputs = model(**batch)
+
+                loss = outputs.loss
+                losses.append(accelerator.gather_for_metrics(loss.repeat(args.per_device_eval_batch_size)))
+
+            losses = torch.cat(losses)
+            try:
+                eval_loss = torch.mean(losses)
+                perplexity = math.exp(eval_loss)
+            except OverflowError:
+                perplexity = float("inf")
+
+            if args.with_tracking:
+                accelerator.log({"test_perplexity": perplexity}, step=completed_steps)
 
         if args.push_to_hub and epoch < args.num_train_epochs - 1:
             accelerator.wait_for_everyone()
