@@ -12,9 +12,11 @@ import torch
 from torch.utils.data import DataLoader
 import transformers
 from accelerate import dispatch_model, init_empty_weights
+
 import pandas as pd
 
 from .fine_tuning import loftQ_parse_args, loftQ_fine_tuning
+from .fine_tuning.train_wikitext_llama import loftQ_fine_tuning_for_wikitext
 from .statistic_profiler import register_scale_hooks, share_scales
 from .datasets import get_data_module
 from .evaluate import evaluate_perplexity, evaluate_harness_downstream
@@ -376,9 +378,24 @@ def pipeline_loqer():
     )
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     logger.info("🚀 Fine-tuning...")
+    args["batch_eval_metrics"] = None
     fine_tuning_args = Namespace(**args)
-    model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
+    if output_dir is not None:
+        logger.info(f"🚀 Saving results to {output_dir}")
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not disable_loqer and mse_df is not None:
+            # save approximation results
+            mse_df.to_csv(output_dir / "approximation_error.csv", index=False)
+            # save AB_dict
+            AB_dict_path = output_dir / "AB_dict.pt"
+            torch.save(AB_dict, AB_dict_path)
+    if fine_tuning_args.dataset_name == "gsm8k":
+        model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
+    elif fine_tuning_args.dataset_name == "Salesforce/wikitext":
+        model=loftQ_fine_tuning_for_wikitext(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
         eval_datamodule = get_data_module(
@@ -396,7 +413,6 @@ def pipeline_loqer():
             num_workers=num_workers,
             collate_fn=data_collator,
         )
-        model = model.to(eval_dtype)
         model = dispatch_model(model, device_map)
         ppl_results = evaluate_perplexity(
             model=model,
