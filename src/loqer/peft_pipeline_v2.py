@@ -136,26 +136,26 @@ def adapt_and_save_clm_model(
         profiler_factory.remove_all_hooks()
         scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
         share_scales(scale_dict, layers_to_register_and_share)
-    # else:
-    #     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
-    #     if tokenizer.pad_token_id is None:
-    #         tokenizer.pad_token = tokenizer.eos_token
+    else:
+        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
+        if tokenizer.pad_token_id is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    #     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-    #     calibration_datamodule = get_data_module_for_peft(
-    #         loqer_calibration_set,
-    #         tokenizer=tokenizer,
-    #         max_length=loqer_max_seq_length,
-    #         num_workers=num_workers,
-    #         overwrite_cache=overwrite_dataset_cache,
-    #     )
-    #     calibration_dataloader = DataLoader(
-    #         calibration_datamodule["train"],
-    #         batch_size=loqer_calibration_batch_size,
-    #         shuffle=False,
-    #         num_workers=num_workers,
-    #         collate_fn=data_collator,
-    #     )
+        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        calibration_datamodule = get_data_module_for_peft(
+            loqer_calibration_set,
+            tokenizer=tokenizer,
+            max_length=loqer_max_seq_length,
+            num_workers=num_workers,
+            overwrite_cache=overwrite_dataset_cache,
+        )
+        calibration_dataloader = DataLoader(
+            calibration_datamodule["train"],
+            batch_size=loqer_calibration_batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=data_collator,
+        )
 
     # it seems LoftQ's NFQuantizer does not support double quantization
     bnb_4bit_use_double_quant = bnb_n_bits == 4
@@ -175,7 +175,7 @@ def adapt_and_save_clm_model(
 
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
-        inference_mode=True,
+        inference_mode=False,
         r=lora_rank,
         lora_alpha=lora_alpha,
         lora_dropout=0.1,
@@ -193,14 +193,14 @@ def adapt_and_save_clm_model(
             error_dict = replace_lora_weights_loftq_4bit(peft_model, num_iters=loftq_num_iters)
             elapsed = time.time() - start
             # evaluate ppl
-            # post_init_ppl = evaluate_perplexity(
-            #     peft_model,
-            #     eval_dataloader=calibration_dataloader,
-            #     num_samples=loqer_num_calibration_samples,
-            #     progress_bar=True,
-            #     description="Evaluating post initialization Loftq+",
-            # )
-            # logger.info(f"Post initialization perplexity (LoftQ):\n{pformat(post_init_ppl, sort_dicts=False)}")
+            post_init_ppl = evaluate_perplexity(
+                peft_model,
+                eval_dataloader=calibration_dataloader,
+                num_samples=loqer_num_calibration_samples,
+                progress_bar=True,
+                description="Evaluating post initialization Loftq+",
+            )
+            logger.info(f"Post initialization perplexity (LoftQ):\n{pformat(post_init_ppl, sort_dicts=False)}")
         else:
             raise NotImplementedError("LoftQ only supports 4-bit quantization")
     elif adapter_init == "loqer":
@@ -209,26 +209,26 @@ def adapt_and_save_clm_model(
             error_dict = replace_lora_weights_loqer_4bit(peft_model, scale_dict=scale_dict)
             elapsed = time.time() - start + calibration_time
             # # evaluate ppl
-            # post_init_ppl = evaluate_perplexity(
-            #     peft_model,
-            #     eval_dataloader=calibration_dataloader,
-            #     num_samples=loqer_num_calibration_samples,
-            #     progress_bar=True,
-            #     description="Evaluating post initialization LoQER+",
-            # )
-            # logger.info(f"Post initialization perplexity (LoQER+):\n{pformat(post_init_ppl, sort_dicts=False)}")
+            post_init_ppl = evaluate_perplexity(
+                peft_model,
+                eval_dataloader=calibration_dataloader,
+                num_samples=loqer_num_calibration_samples,
+                progress_bar=True,
+                description="Evaluating post initialization LoQER+",
+            )
+            logger.info(f"Post initialization perplexity (LoQER+):\n{pformat(post_init_ppl, sort_dicts=False)}")
         else:
             raise NotImplementedError("LoQER only supports 4-bit quantization")
     elif adapter_init == "qlora":
         if bnb_n_bits == 4:
-            # post_init_ppl = evaluate_perplexity(
-            #     peft_model,
-            #     eval_dataloader=calibration_dataloader,
-            #     num_samples=loqer_num_calibration_samples,
-            #     progress_bar=True,
-            #     description="Evaluating post initialization QLoRA",
-            # )
-            # logger.info(f"Post initialization perplexity (qLoRA):\n{pformat(post_init_ppl, sort_dicts=False)}")
+            post_init_ppl = evaluate_perplexity(
+                peft_model,
+                eval_dataloader=calibration_dataloader,
+                num_samples=loqer_num_calibration_samples,
+                progress_bar=True,
+                description="Evaluating post initialization QLoRA",
+            )
+            logger.info(f"Post initialization perplexity (qLoRA):\n{pformat(post_init_ppl, sort_dicts=False)}")
             pass
         else:
             raise NotImplementedError("QLoRA only supports 4-bit quantization")
@@ -238,8 +238,12 @@ def adapt_and_save_clm_model(
         raise ValueError(f"Invalid adapter init: {adapter_init}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    peft_model.save_pretrained(output_dir / "adapter")
-    logger.info(f"Adapter saved to {output_dir / 'adapter'}")
+    if adapter_init in ["loftq", "loqer"]:
+        peft_model.save_pretrained(output_dir / "adapter")
+        logger.info(f"Adapter saved to {output_dir / 'adapter'}")
+    else:
+        # qlora
+        lora_config.save_pretrained(output_dir / "adapter")
 
     if adapter_init in ["loftq", "loqer"] and bnb_n_bits == 4:
         base_model = peft_model.unload()

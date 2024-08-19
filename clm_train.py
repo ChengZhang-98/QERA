@@ -31,6 +31,7 @@ import random
 from itertools import chain
 from pathlib import Path
 import yaml
+import json
 
 import datasets
 import torch
@@ -42,7 +43,7 @@ from datasets import load_dataset
 from huggingface_hub import HfApi
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from peft import PeftModel, prepare_model_for_kbit_training
+from peft import PeftModel, prepare_model_for_kbit_training, PeftConfig, LoraConfig, get_peft_model
 
 import transformers
 from transformers import (
@@ -235,11 +236,18 @@ def parse_args():
         ),
     )
     # *: custom arguments for peft
-    parser.add_argument("--lora-adapter-dir", type=str, default=None)
-    parser.add_argument("--bnb-config-yaml", type=str, default=None)
-    parser.add_argument("--run-name", type=str, default=None)
-    parser.add_argument("--use-gradient-checkpointing", action="store_true", default=False)
+    parser.add_argument(
+        "--lora_init_method",
+        type=str,
+        required=True,
+        choices=["full-finetune", "lora", "qlora,2", "loftq,2", "loqer,2", "qlora,4", "loftq,4", "loqer,4"],
+    )
+    parser.add_argument("--bnb_config_yaml", type=str, default=None)  # this is required by loqer, qlora, and loftq
+    parser.add_argument("--lora_adapter_dir", type=str, default=None)
+    parser.add_argument("--run_name", type=str, default=None)
+    parser.add_argument("--use_gradient_checkpointing", action="store_true", default=False)
     args = parser.parse_args()
+    # check quantized adapter args
 
     # Sanity checks
     if args.dataset_name is None and args.train_file is None and args.validation_file is None:
@@ -263,6 +271,27 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # fmt: off
+    if args.lora_init_method == "full-finetune":
+        lora_init_method = "full-finetune"
+    elif args.lora_init_method == "lora":
+        lora_init_method = "lora"
+    elif args.lora_init_method == "qlora,4":
+        lora_init_method = "qlora,4"
+        assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
+        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+        # assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    elif args.lora_init_method == "loftq,4":
+        lora_init_method = "loftq,4"
+        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    elif args.lora_init_method == "loqer,4":
+        lora_init_method = "loqer,4"
+        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    else:
+        raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
+    # fmt: on
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
@@ -405,54 +434,59 @@ def main():
 
     # *: create bnb model or un-quantized model
     # *: hard coded bfloat16
-    model_form_info = ""
-    if args.model_name_or_path:
-        model_form_info += f"pretrained, "
-        if args.bnb_config_yaml:
-            with open(args.bnb_config_yaml, "r") as f:
-                bnb_config_dict = yaml.safe_load(f)
-            bnb_config = BitsAndBytesConfig(**bnb_config_dict)
-            model = AutoModelForCausalLM.from_pretrained(
-                args.model_name_or_path,
-                quantization_config=bnb_config,
-                torch_dtype=torch.bfloat16,
-            )
-            model = prepare_model_for_kbit_training(
-                model,
-                use_gradient_checkpointing=args.use_gradient_checkpointing,
-                gradient_checkpointing_kwargs={"use_reentrant": True},  # *: to avoid warning
-            )
-            logger.info(f"🔍 Loaded model with BitsAndBytesConfig:\n{bnb_config}")
-            model_form_info += f"bnb, "
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                args.model_name_or_path,
-                from_tf=bool(".ckpt" in args.model_name_or_path),
-                config=config,
-                low_cpu_mem_usage=args.low_cpu_mem_usage,
-                trust_remote_code=args.trust_remote_code,
-                torch_dtype=torch.bfloat16,
-            )
-            model_form_info += f"un-quantized, "
-    else:
-        model_form_info += f"train from scratch, "
-        logger.info("Training new model from scratch")
-        model = AutoModelForCausalLM.from_config(
-            config, trust_remote_code=args.trust_remote_code, torch_dtype=torch.bfloat16
+    model_kwargs = dict(
+        pretrained_model_name_or_path=args.model_name_or_path,
+        from_tf=bool(".ckpt" in args.model_name_or_path),
+        config=config,
+        trust_remote_code=args.trust_remote_code,
+        torch_dtype="auto",
+        # low_cpu_mem_usage=model_args.low_cpu_mem_usage,
+    )
+    if lora_init_method == "full-finetune":
+        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
+    elif lora_init_method == "lora":
+        raise NotImplementedError("LoRA support is not implemented yet.")
+    elif lora_init_method == "qlora,4":
+        with open(args.bnb_config_yaml, "r") as f:
+            bnb_config_dict = yaml.safe_load(f)
+        bnb_config = BitsAndBytesConfig(**bnb_config_dict)
+        model_kwargs["quantization_config"] = bnb_config
+        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.use_gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
         )
+        with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
+            lora_config_dict = json.load(f)
+        lora_config_dict["inference_mode"] = False
+        lora_config = LoraConfig(**lora_config_dict)
+        model = get_peft_model(model, lora_config)
+    elif lora_init_method == "loftq,4":
+        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.use_gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
+        )
+        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+    elif lora_init_method == "loqer,4":
+        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.use_gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
+        )
+        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+    else:
+        raise ValueError(f"Invalid lora_init_method: {lora_init_method}")
+    model.train()
 
-    # *: Load the adapter
-    lora_adapter_dir = Path(args.lora_adapter_dir) if args.lora_adapter_dir else None
-    if lora_adapter_dir:
-        model = PeftModel.from_pretrained(model, lora_adapter_dir, is_trainable=True)
-        logger.info(f"🔍 Loaded model with LoraAdapter from {lora_adapter_dir}")
+    if lora_init_method != "full-finetune":
         trainable_params, all_param = model.get_nb_trainable_parameters()
         logger.info(
             f"🔍 trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}"
         )
-        model_form_info += f"lora_adapter ({lora_adapter_dir.as_posix()}), "
-
-    logger.info(f"🔍 Model form: {model_form_info}")
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
