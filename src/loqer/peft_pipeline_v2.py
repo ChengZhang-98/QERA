@@ -18,7 +18,11 @@ from loqer.datasets import get_data_module_for_peft
 from loqer.models import find_layers_to_register_scale_hook
 from loqer.statistic_profiler import register_scale_hooks, share_scales
 from loqer.evaluate import evaluate_perplexity
-from loqer.fine_tuning import replace_lora_weights_loftq, replace_lora_weights_loqer, replace_lora_weight_qlora_2bit
+from loqer.fine_tuning import (
+    replace_lora_weights_loftq_4bit,
+    replace_lora_weights_loqer_4bit,
+    # replace_lora_weight_qlora_2bit,
+)
 from loqer.utils import create_device_map
 
 logger = logging.getLogger(__name__)
@@ -42,6 +46,7 @@ def adapt_and_save_clm_model(
     num_workers: int,
     overwrite_output_dir: bool,
     overwrite_dataset_cache: bool,
+    loqer_scaling_mode: str,
 ):
     """
     We measured the perplexity after initialization before fine-tuning as sanity check.
@@ -70,9 +75,9 @@ def adapt_and_save_clm_model(
 
         loqer, 2-bit ppl = 8.886483023661881
     """
-    assert adapter_init in ["loftq", "loqer", "qlora", "lora"]
-
-    LOQER_SCALING_MODE = "diag"
+    assert adapter_init in ["loftq", "loqer", "qlora"]
+    assert bnb_n_bits in [2, 4]
+    assert loqer_scaling_mode in ["diag", "rxx"]
 
     output_dir = Path(output_dir)
     if output_dir.exists():
@@ -102,7 +107,7 @@ def adapt_and_save_clm_model(
         data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
         layers_to_register_and_share = find_layers_to_register_scale_hook(model)
         profiler_factory = register_scale_hooks(
-            model, layers_to_register_and_share, mode=LOQER_SCALING_MODE, torch_dtype=torch.float32
+            model, layers_to_register_and_share, mode=loqer_scaling_mode, torch_dtype=torch.float32
         )
         calibration_datamodule = get_data_module_for_peft(
             loqer_calibration_set,
@@ -131,21 +136,36 @@ def adapt_and_save_clm_model(
         profiler_factory.remove_all_hooks()
         scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
         share_scales(scale_dict, layers_to_register_and_share)
+    # else:
+    #     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
+    #     if tokenizer.pad_token_id is None:
+    #         tokenizer.pad_token = tokenizer.eos_token
+
+    #     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    #     calibration_datamodule = get_data_module_for_peft(
+    #         loqer_calibration_set,
+    #         tokenizer=tokenizer,
+    #         max_length=loqer_max_seq_length,
+    #         num_workers=num_workers,
+    #         overwrite_cache=overwrite_dataset_cache,
+    #     )
+    #     calibration_dataloader = DataLoader(
+    #         calibration_datamodule["train"],
+    #         batch_size=loqer_calibration_batch_size,
+    #         shuffle=False,
+    #         num_workers=num_workers,
+    #         collate_fn=data_collator,
+    #     )
 
     # it seems LoftQ's NFQuantizer does not support double quantization
-    bnb_config = None
-    if adapter_init in ["loftq", "loqer", "qlora"]:
-        bnb_4bit_use_double_quant = bnb_n_bits == 4
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
-            bnb_4bit_quant_type=bnb_quant_type,
-        )
-        model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
-    else:
-        # lora
-        model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path)
+    bnb_4bit_use_double_quant = bnb_n_bits == 4
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
+        bnb_4bit_quant_type=bnb_quant_type,
+    )
+    model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     model.eval()
     lora_target_modules_ = lora_target_modules
     # fmt: off
@@ -163,40 +183,78 @@ def adapt_and_save_clm_model(
         init_lora_weights=True,
     )
     peft_model = get_peft_model(model, lora_config)
+    peft_model.eval()
 
     error_dict = None
     elapsed = None
     if adapter_init == "loftq":
-        start = time.time()
-        error_dict = replace_lora_weights_loftq(peft_model, num_iters=loftq_num_iters, num_bits=bnb_n_bits)
-        elapsed = time.time() - start
+        if bnb_n_bits == 4:
+            start = time.time()
+            error_dict = replace_lora_weights_loftq_4bit(peft_model, num_iters=loftq_num_iters)
+            elapsed = time.time() - start
+            # evaluate ppl
+            # post_init_ppl = evaluate_perplexity(
+            #     peft_model,
+            #     eval_dataloader=calibration_dataloader,
+            #     num_samples=loqer_num_calibration_samples,
+            #     progress_bar=True,
+            #     description="Evaluating post initialization Loftq+",
+            # )
+            # logger.info(f"Post initialization perplexity (LoftQ):\n{pformat(post_init_ppl, sort_dicts=False)}")
+        else:
+            raise NotImplementedError("LoftQ only supports 4-bit quantization")
     elif adapter_init == "loqer":
-        start = time.time()
-        error_dict = replace_lora_weights_loqer(peft_model, scale_dict=scale_dict, num_bits=bnb_n_bits)
-        elapsed = time.time() - start + calibration_time
+        if bnb_n_bits == 4:
+            start = time.time()
+            error_dict = replace_lora_weights_loqer_4bit(peft_model, scale_dict=scale_dict)
+            elapsed = time.time() - start + calibration_time
+            # # evaluate ppl
+            # post_init_ppl = evaluate_perplexity(
+            #     peft_model,
+            #     eval_dataloader=calibration_dataloader,
+            #     num_samples=loqer_num_calibration_samples,
+            #     progress_bar=True,
+            #     description="Evaluating post initialization LoQER+",
+            # )
+            # logger.info(f"Post initialization perplexity (LoQER+):\n{pformat(post_init_ppl, sort_dicts=False)}")
+        else:
+            raise NotImplementedError("LoQER only supports 4-bit quantization")
     elif adapter_init == "qlora":
         if bnb_n_bits == 4:
+            # post_init_ppl = evaluate_perplexity(
+            #     peft_model,
+            #     eval_dataloader=calibration_dataloader,
+            #     num_samples=loqer_num_calibration_samples,
+            #     progress_bar=True,
+            #     description="Evaluating post initialization QLoRA",
+            # )
+            # logger.info(f"Post initialization perplexity (qLoRA):\n{pformat(post_init_ppl, sort_dicts=False)}")
             pass
-        elif bnb_n_bits == 2:
-            error_dict = replace_lora_weight_qlora_2bit(peft_model)
         else:
-            raise ValueError(f"Invalid bnb_n_bits: {bnb_n_bits}")
+            raise NotImplementedError("QLoRA only supports 4-bit quantization")
+        # elif bnb_n_bits == 2:
+        #     error_dict = replace_lora_weight_qlora_2bit(peft_model)
     else:
         raise ValueError(f"Invalid adapter init: {adapter_init}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    peft_model.save_pretrained(output_dir / "adapter")
+    logger.info(f"Adapter saved to {output_dir / 'adapter'}")
 
-    peft_model.save_pretrained(output_dir)
-    logger.info(f"Model saved to {output_dir}")
-    if bnb_config is not None:
-        bnb_config_dict = {
-            "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "bfloat16",
-            "bnb_4bit_use_double_quant": bnb_4bit_use_double_quant,
-            "bnb_4bit_quant_type": bnb_quant_type,
-        }
-        with open(output_dir / "bnb_config.yaml", "w") as f:
-            yaml.safe_dump(bnb_config_dict, f)
+    if adapter_init in ["loftq", "loqer"] and bnb_n_bits == 4:
+        base_model = peft_model.unload()
+        # save the bnb model as it is
+        base_model.save_pretrained(output_dir / "base_model")
+        logger.info(f"BnB base model saved to {output_dir / 'base_model'}")
+
+    bnb_config_dict = {
+        "load_in_4bit": True,
+        "bnb_4bit_compute_dtype": "bfloat16",
+        "bnb_4bit_use_double_quant": bnb_4bit_use_double_quant,
+        "bnb_4bit_quant_type": bnb_quant_type,
+    }
+    with open(output_dir / "bnb_config.yaml", "w") as f:
+        yaml.safe_dump(bnb_config_dict, f)
 
     if elapsed is not None or error_dict is not None:
         results = {"initialization_time": elapsed, "error_dict": error_dict}
@@ -249,8 +307,9 @@ def adapt_and_save_pipeline():
     parser.add_argument("--loqer-num-calibration-samples", type=int, default=128)
     parser.add_argument("--loqer-calibration-batch-size", type=int, default=2)
     parser.add_argument("--loqer-max-seq-length", type=int, default=2048)
+    parser.add_argument("--loqer-scaling-mode", type=str, default="diag", help="Default: diag", choices=["diag", "rxx"])
     parser.add_argument("--loftq-num-iters", type=int, default=1, help="Default: 1")
-    parser.add_argument("--bnb-quant-type", type=str, default="nf4", help="Default: nf4", choices=["nf4", "fp4"])
+    parser.add_argument("--bnb-quant-type", type=str, default="fp4", help="Default: fp4", choices=["nf4", "fp4"])
     parser.add_argument("--bnb-n-bits", type=int, default=4, help="Default: 4", choices=[2, 4])
     parser.add_argument("--lora-rank", type=int, default=64, help="Default: 64")
     parser.add_argument("--lora-alpha", type=float, default=128.0, help="Default: 128.0")
@@ -289,6 +348,7 @@ def adapt_and_save_pipeline():
             num_workers=args.num_workers,
             overwrite_output_dir=args.overwrite_output_dir,
             overwrite_dataset_cache=args.overwrite_dataset_cache,
+            loqer_scaling_mode=args.loqer_scaling_mode,
         )
     elif args.model_type == "cls":
         adapt_and_save_cls_model(
