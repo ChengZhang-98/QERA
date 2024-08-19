@@ -18,7 +18,7 @@ from loqer.datasets import get_data_module_for_peft
 from loqer.models import find_layers_to_register_scale_hook
 from loqer.statistic_profiler import register_scale_hooks, share_scales
 from loqer.evaluate import evaluate_perplexity
-from loqer.fine_tuning import replace_lora_weights_loftq, replace_lora_weights_loqer
+from loqer.fine_tuning import replace_lora_weights_loftq, replace_lora_weights_loqer, replace_lora_weight_qlora_2bit
 from loqer.utils import create_device_map
 
 logger = logging.getLogger(__name__)
@@ -175,7 +175,12 @@ def adapt_and_save_clm_model(
         error_dict = replace_lora_weights_loqer(peft_model, scale_dict=scale_dict, num_bits=bnb_n_bits)
         elapsed = time.time() - start + calibration_time
     elif adapter_init == "qlora":
-        pass
+        if bnb_n_bits == 4:
+            pass
+        elif bnb_n_bits == 2:
+            error_dict = replace_lora_weight_qlora_2bit(peft_model)
+        else:
+            raise ValueError(f"Invalid bnb_n_bits: {bnb_n_bits}")
     else:
         raise ValueError(f"Invalid adapter init: {adapter_init}")
 

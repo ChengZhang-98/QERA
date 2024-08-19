@@ -1,2 +1,2 @@
 from .train_gsm8k_llama import loftQ_parse_args, loftQ_fine_tuning
-from .initialization import replace_lora_weights_loftq, replace_lora_weights_loqer
+from .initialization import replace_lora_weights_loftq, replace_lora_weights_loqer, replace_lora_weight_qlora_2bit
