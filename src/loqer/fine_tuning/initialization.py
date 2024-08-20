@@ -173,7 +173,7 @@ def replace_lora_weights_loftq_2bit(
     named_modules = {name: module for name, module in peft_model.named_modules()}
     error_dict = {}
 
-    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (LoftQ)"):
+    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (Emulated 2-bit LoftQ)"):
         if not isinstance(module, LoraLinear):
             continue
         if not name.startswith(prefix):
@@ -360,13 +360,14 @@ def replace_lora_weight_loqer_2bit(peft_model, bnb_quant_type, scale_dict, adapt
     named_modules = {name: module for name, module in peft_model.named_modules()}
     error_dict = {}
 
-    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (LoQER+)"):
+    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (Emulated 2-bit LoQER+)"):
         if not isinstance(module, LoraLinear):
             continue
         if not name.startswith(prefix):
             raise TypeError(f"Not peft model")
 
         reduced_rank = module.r[adapter_name]
+        name = name[len(prefix) :]
         scale = scale_dict[name]
 
         lora_A, lora_B, new_weight, error_f_norm = init_lora_loqer_2bit(
@@ -401,7 +402,7 @@ def init_lora_qlora_2bit(weight: torch.Tensor, bnb_quant_type: str, compute_devi
     error_f_norm = [torch.linalg.norm(ori_weight - dequantized_weight, ord="fro").cpu().item()]
 
     dequantized_weight = dequantized_weight.to(ori_weight_dtype)
-    return qweight, error_f_norm
+    return dequantized_weight, error_f_norm
 
 
 @torch.no_grad()
@@ -412,7 +413,7 @@ def replace_lora_weight_qlora_2bit(peft_model, bnb_quant_type, compute_device=No
     named_modules = {name: module for name, module in peft_model.named_modules()}
     error_dict = {}
 
-    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (qLoRA 2-bit)"):
+    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (Emulatd 2-bit qLoRA)"):
         if not isinstance(module, LoraLinear):
             continue
         if not name.startswith(prefix):
