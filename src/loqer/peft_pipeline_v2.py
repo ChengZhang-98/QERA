@@ -97,6 +97,8 @@ def adapt_and_save_clm_model(
         calibration_datamodule = get_data_module_for_peft(
             loqer_calibration_set,
             tokenizer=tokenizer,
+            model_config=None,
+            pad_to_max_length=None,
             max_length=loqer_max_seq_length,
             num_workers=num_workers,
             overwrite_cache=overwrite_dataset_cache,

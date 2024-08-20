@@ -99,10 +99,10 @@ def preprocess_data_module_for_peft(
     raw_dataset_dict,
     name: str,
     tokenizer,
+    pad_to_max_length: bool,
     max_length: int,
     num_proc: int,
     model_config,
-    pad_to_max_length: bool,
     overwrite_cache: bool = False,
 ) -> hf_datasets.DatasetDict:
     """Preprocess for PEFT training/evaluation"""
@@ -141,6 +141,8 @@ def preprocess_data_module_for_peft(
 def get_data_module_for_peft(
     name: str,
     tokenizer,
+    model_config,
+    pad_to_max_length: bool,
     max_length: int,
     num_workers: int,
     overwrite_cache: bool = False,
@@ -148,10 +150,12 @@ def get_data_module_for_peft(
     raw_data_module = get_raw_data_module(name)
     data_module = preprocess_data_module_for_peft(
         raw_data_module,
-        name,
+        name=name,
         tokenizer=tokenizer,
+        pad_to_max_length=pad_to_max_length,
         max_length=max_length,
         num_proc=num_workers,
+        model_config=model_config,
         overwrite_cache=overwrite_cache,
     )
     return data_module
