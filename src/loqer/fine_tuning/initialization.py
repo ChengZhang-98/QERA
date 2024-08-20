@@ -7,6 +7,7 @@ import bitsandbytes as bnb
 from peft import get_peft_model, LoraConfig
 from peft.utils.loftq_utils import is_bnb_4bit_available, _SafetensorLoader, NFQuantizer
 from peft.tuners.lora import Linear4bit
+from peft.tuners.lora.layer import Linear as LoraLinear
 
 
 def _low_rank_decomposition_loftq(weight, reduced_rank=32):
@@ -132,6 +133,71 @@ def replace_lora_weights_loftq_4bit(
 
 
 @torch.no_grad()
+def init_lora_loftq_2bit(weight: torch.Tensor, bnb_quant_type: str, num_iters, reduced_rank: int, compute_device):
+    compute_device = "cuda" if compute_device is None else compute_device
+    assert compute_device != "cpu"
+    ori_weight_dtype = weight.dtype
+
+    residual = weight.clone().to(device=compute_device, dtype=torch.float32)
+    weight = weight.to(device=compute_device, dtype=torch.float32)
+    error_f_norm = []
+
+    quantizer = NFQuantizer(num_bits=2, device=compute_device, method=bnb_quant_type, block_size=64)
+
+    for i in range(num_iters):
+        qweight, max_abs, shape = quantizer.quantize_block(residual)
+        dequantized_weight = quantizer.dequantize_block(qweight, max_abs, shape)
+
+        dequantized_weight = dequantized_weight.to(device=compute_device, dtype=torch.float32)
+        residual = weight - dequantized_weight
+
+        torch.cuda.empty_cache()
+        output = _low_rank_decomposition_loftq(residual, reduced_rank)
+        L, R = output["L"], output["R"]
+        residual = weight - torch.mm(L, R)
+        error_f_norm.append(output["error_f_norm"])
+
+    lora_A, lora_B = R, L
+    return lora_A, lora_B, dequantized_weight.to(ori_weight_dtype), error_f_norm
+
+
+def replace_lora_weights_loftq_2bit(
+    peft_model, bnb_quant_type, adapter_name="default", num_iters: int = 1, compute_device=None
+):
+    """
+    Emulated 2-bit loftq
+    """
+    assert bnb_quant_type in ["normal", "uniform"]
+    prefix = "base_model.model."
+
+    named_modules = {name: module for name, module in peft_model.named_modules()}
+    error_dict = {}
+
+    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (LoftQ)"):
+        if not isinstance(module, LoraLinear):
+            continue
+        if not name.startswith(prefix):
+            raise TypeError(f"Not peft model")
+
+        reduced_rank = module.r[adapter_name]
+
+        lora_A, lora_B, new_weight, error_f_norm = init_lora_loftq_2bit(
+            weight=module.weight,
+            bnb_quant_type=bnb_quant_type,
+            num_iters=num_iters,
+            reduced_rank=reduced_rank,
+            compute_device=compute_device,
+        )
+        error_dict[name] = error_f_norm
+
+        module.lora_A[adapter_name].weight.data = lora_A
+        module.lora_B[adapter_name].weight.data = lora_B
+        module.weight.data = new_weight
+
+    return error_dict
+
+
+@torch.no_grad()
 def _low_rank_decomposition_loqer(x: torch.Tensor, reduced_rank: int):
     assert x.ndim == 2
     # U, S, Vh = torch.linalg.svd(x, full_matrices=True)
@@ -174,7 +240,6 @@ def init_lora_loqer_4bit(qweight, weight: torch.Tensor, scale: torch.Tensor, red
     assert scale.ndim in [1, 2]
     assert scale.shape[0] == weight.shape[1]
     compute_device = qweight.data.device if compute_device is None else compute_device
-    weight = weight.half()
 
     if scale.ndim == 1:
         scale = torch.diag(scale)
@@ -251,55 +316,117 @@ def replace_lora_weights_loqer_4bit(
     return error_dict
 
 
-# @torch.no_grad()
-# def init_lora_qlora_2bit(qweight, weight, compute_device):
-#     compute_device = "cuda" if compute_device is None else compute_device
+@torch.no_grad()
+def init_lora_loqer_2bit(
+    weight: torch.Tensor, scale: torch.Tensor, bnb_quant_type: str, reduced_rank: int, compute_deivce
+):
+    assert scale.ndim in [1, 2]
+    assert scale.shape[0] == weight.shape[1]
+    assert bnb_quant_type in ["normal", "uniform"]
+    compute_deivce = "cuda" if compute_deivce is None else compute_deivce
 
-#     weight = weight.half()
-#     quant_state = qweight.quant_state
-#     dequantized_weight = bnb.functional.dequantize_4bit(qweight.data, quant_state)
+    orig_weight_dtype = weight.dtype
+    orig_weight = weight.clone().to(device=compute_deivce, dtype=torch.float32)
 
-#     quantizer = NFQuantizer(
-#         num_bits=2,
-#         device=compute_device,
-#         method="normal" if quant_state.quant_type == "nf4" else "uniform",
-#         block_size=quant_state.blocksize,
-#     )
-#     qweight, max_abs, shape = quantizer.quantize_block(dequantized_weight)
-#     dequantized_weight = quantizer.dequantize_block(qweight, max_abs, shape)
-#     weight = weight.to(device=compute_device, dtype=torch.float32)
-#     dequantized_weight = dequantized_weight.to(device=compute_device, dtype=torch.float32)
+    if scale.ndim == 1:
+        scale = torch.diag(scale)
 
-#     # calculate the f-norm of (weight - dequantized_weight)
-#     error_f_norm = [torch.linalg.norm(weight - dequantized_weight, ord="fro").cpu().item()]
+    quantizer = NFQuantizer(num_bits=2, device=compute_deivce, method=bnb_quant_type, block_size=64)
 
-#     return qweight, error_f_norm
+    qweight, max_abs, shape = quantizer.quantize_block(weight)
+    dequantized_weight = quantizer.dequantize_block(qweight, max_abs, shape)
+    dequantized_weight = dequantized_weight.to(device=compute_deivce, dtype=torch.float32)
+    scale = scale.to(device=compute_deivce, dtype=torch.float32)
+
+    residual = orig_weight - dequantized_weight
+    residual_scaled = residual @ scale
+
+    torch.cuda.empty_cache()
+    L, R_, error_f_norm = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
+    R = torch.linalg.solve(scale, R_.T).T
+
+    lora_A, lora_B = R, L
+    return lora_A, lora_B, dequantized_weight.to(orig_weight_dtype), error_f_norm
 
 
-# @torch.no_grad()
-# def replace_lora_weight_qlora_2bit(peft_model, model_path=None, compute_device=None):
-#     prefix = "base_model.model."
-#     safetensor_loader = _SafetensorLoader(peft_model, model_path)
+def replace_lora_weight_loqer_2bit(peft_model, bnb_quant_type, scale_dict, adapter_name="default", compute_device=None):
+    """
+    Emulated 2-bit loqer
+    """
 
-#     named_modules = {name: module for name, module in peft_model.named_modules()}
-#     error_dict = {}
+    assert bnb_quant_type in ["normal", "uniform"]
+    prefix = "base_model.model."
 
-#     for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (qLoRA 2-bit)"):
-#         if not isinstance(module, Linear4bit):
-#             continue
-#         if not name.startswith(prefix):
-#             raise TypeError(f"Not peft model")
+    named_modules = {name: module for name, module in peft_model.named_modules()}
+    error_dict = {}
 
-#         name = name[len(prefix) :]
-#         ori_weight = safetensor_loader.get_tensor(name + ".weight")
+    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (LoQER+)"):
+        if not isinstance(module, LoraLinear):
+            continue
+        if not name.startswith(prefix):
+            raise TypeError(f"Not peft model")
 
-#         new_qweight, error_f_norm = init_lora_qlora_2bit(
-#             qweight=module.weight,
-#             weight=ori_weight,
-#             compute_device=compute_device,
-#         )
-#         error_dict[name] = error_f_norm
+        reduced_rank = module.r[adapter_name]
+        scale = scale_dict[name]
 
-#         module.weight.data = new_qweight
+        lora_A, lora_B, new_weight, error_f_norm = init_lora_loqer_2bit(
+            weight=module.weight,
+            scale=scale,
+            bnb_quant_type=bnb_quant_type,
+            reduced_rank=reduced_rank,
+            compute_deivce=module.weight.device if compute_device is None else compute_device,
+        )
+        error_dict[name] = [error_f_norm]
 
-#     return error_dict
+        module.lora_A[adapter_name].weight.data = lora_A
+        module.lora_B[adapter_name].weight.data = lora_B
+        module.weight.data = new_weight
+
+    return error_dict
+
+
+@torch.no_grad()
+def init_lora_qlora_2bit(weight: torch.Tensor, bnb_quant_type: str, compute_device):
+    compute_device = "cuda" if compute_device is None else compute_device
+    assert compute_device != "cpu"
+    ori_weight_dtype = weight.dtype
+    ori_weight = weight.clone().to(device=compute_device, dtype=torch.float32)
+    weight = weight.to(device=compute_device, dtype=torch.float32)
+
+    quantizer = NFQuantizer(num_bits=2, device=compute_device, method=bnb_quant_type, block_size=64)
+
+    qweight, max_abs, shape = quantizer.quantize_block(weight)
+    dequantized_weight = quantizer.dequantize_block(qweight, max_abs, shape)
+
+    error_f_norm = [torch.linalg.norm(ori_weight - dequantized_weight, ord="fro").cpu().item()]
+
+    dequantized_weight = dequantized_weight.to(ori_weight_dtype)
+    return qweight, error_f_norm
+
+
+@torch.no_grad()
+def replace_lora_weight_qlora_2bit(peft_model, bnb_quant_type, compute_device=None):
+    assert bnb_quant_type in ["normal", "uniform"]
+    prefix = "base_model.model."
+
+    named_modules = {name: module for name, module in peft_model.named_modules()}
+    error_dict = {}
+
+    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (qLoRA 2-bit)"):
+        if not isinstance(module, LoraLinear):
+            continue
+        if not name.startswith(prefix):
+            raise TypeError(f"Not peft model")
+
+        name = name[len(prefix) :]
+
+        new_qweight, error_f_norm = init_lora_qlora_2bit(
+            weight=module.weight,
+            bnb_quant_type=bnb_quant_type,
+            compute_device=module.weight.device if compute_device is None else compute_device,
+        )
+        error_dict[name] = error_f_norm
+
+        module.weight.data = new_qweight
+
+    return error_dict
