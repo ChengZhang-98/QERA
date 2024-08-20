@@ -49,6 +49,7 @@ def adapt_and_save_clm_model(
     overwrite_output_dir: bool,
     overwrite_dataset_cache: bool,
     loqer_scaling_mode: str,
+    peek_post_init_metrics: bool,
 ):
     """
     We measured the perplexity after initialization before fine-tuning as sanity check.
@@ -91,6 +92,7 @@ def adapt_and_save_clm_model(
 
     # LoQER calibration
     scale_dict = None
+    calibration_dataloader = None
     if adapter_init == "loqer":
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
         if tokenizer.pad_token_id is None:
@@ -138,7 +140,7 @@ def adapt_and_save_clm_model(
         profiler_factory.remove_all_hooks()
         scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
         share_scales(scale_dict, layers_to_register_and_share)
-    else:
+    elif peek_post_init_metrics:
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -172,6 +174,8 @@ def adapt_and_save_clm_model(
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     else:
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path)
+        device_map = create_device_map(model, device_map)
+        model = dispatch_model(model, device_map)
     model.eval()
     lora_target_modules_ = lora_target_modules
     # fmt: off
@@ -199,15 +203,6 @@ def adapt_and_save_clm_model(
             start = time.time()
             error_dict = replace_lora_weights_loftq_4bit(peft_model, num_iters=loftq_num_iters)
             elapsed = time.time() - start
-            # evaluate ppl
-            post_init_ppl = evaluate_perplexity(
-                peft_model,
-                eval_dataloader=calibration_dataloader,
-                num_samples=loqer_num_calibration_samples,
-                progress_bar=True,
-                description="Evaluating post initialization Loftq+",
-            )
-            logger.info(f"Post initialization perplexity (LoftQ):\n{pformat(post_init_ppl, sort_dicts=False)}")
         elif bnb_n_bits == 2:
             start = time.time()
             error_dict = replace_lora_weights_loftq_2bit(
@@ -216,16 +211,6 @@ def adapt_and_save_clm_model(
             elapsed = time.time() - start
         else:
             raise NotImplementedError("LoftQ only supports 2-bit and 4-bit quantization")
-        peft_model.eval()
-        peft_model.cuda()
-        post_init_ppl = evaluate_perplexity(
-            peft_model,
-            eval_dataloader=calibration_dataloader,
-            num_samples=loqer_num_calibration_samples,
-            progress_bar=True,
-            description="Evaluating post initialization LoftQ",
-        )
-        logger.info(f"Post initialization perplexity (LoftQ):\n{pformat(post_init_ppl, sort_dicts=False)}")
     elif adapter_init == "loqer":
         if bnb_n_bits == 4:
             start = time.time()
@@ -239,17 +224,6 @@ def adapt_and_save_clm_model(
             elapsed = time.time() - start + calibration_time
         else:
             raise NotImplementedError("LoQER only supports 2-bit and 4-bit quantization")
-        # # evaluate ppl
-        peft_model.eval()
-        peft_model.cuda()
-        post_init_ppl = evaluate_perplexity(
-            peft_model,
-            eval_dataloader=calibration_dataloader,
-            num_samples=loqer_num_calibration_samples,
-            progress_bar=True,
-            description="Evaluating post initialization LoQER+",
-        )
-        logger.info(f"Post initialization perplexity (LoQER+):\n{pformat(post_init_ppl, sort_dicts=False)}")
     elif adapter_init == "qlora":
         if bnb_n_bits == 4:
             pass
@@ -259,8 +233,12 @@ def adapt_and_save_clm_model(
             elapsed = time.time() - start
         else:
             raise NotImplementedError("QLoRA only supports 2-bit and 4-bit quantization")
+    else:
+        raise ValueError(f"Invalid adapter init: {adapter_init}")
+
+    if peek_post_init_metrics:
         peft_model.eval()
-        peft_model.cuda()
+        # peft_model.cuda()
         post_init_ppl = evaluate_perplexity(
             peft_model,
             eval_dataloader=calibration_dataloader,
@@ -269,8 +247,6 @@ def adapt_and_save_clm_model(
             description="Evaluating post initialization QLoRA",
         )
         logger.info(f"Post initialization perplexity (qLoRA):\n{pformat(post_init_ppl, sort_dicts=False)}")
-    else:
-        raise ValueError(f"Invalid adapter init: {adapter_init}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     if adapter_init in ["loftq", "loqer"]:
@@ -365,6 +341,7 @@ def adapt_and_save_pipeline():
     parser.add_argument("--overwrite-output-dir", "-ow", dest="overwrite_output_dir", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overwrite-dataset-cache", action="store_true")
+    parser.add_argument("--peek-post-init-metrics", action="store_true", default=False)
     args = parser.parse_args()
     logger.info(f"Arguments\n{pformat(vars(args), sort_dicts=True)}")
     transformers.set_seed(args.seed)
@@ -389,6 +366,7 @@ def adapt_and_save_pipeline():
             overwrite_output_dir=args.overwrite_output_dir,
             overwrite_dataset_cache=args.overwrite_dataset_cache,
             loqer_scaling_mode=args.loqer_scaling_mode,
+            peek_post_init_metrics=args.peek_post_init_metrics,
         )
     elif args.model_type == "cls":
         adapt_and_save_cls_model(
