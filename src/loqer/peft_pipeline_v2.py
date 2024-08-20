@@ -319,7 +319,6 @@ def adapt_and_save_pipeline():
         "--bnb-quant-type",
         type=str,
         default="fp4",
-        help="Default: fp4",
         choices=["nf4", "fp4"],
         help="quantization type for the frozen weights. Here 'nf4' and 'fp4' only mean normal float and floating-point. The bit-width should be specified by --bnb-n-bits",
     )
