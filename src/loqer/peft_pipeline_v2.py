@@ -52,31 +52,12 @@ def adapt_and_save_clm_model(
     peek_post_init_metrics: bool,
 ):
     """
-    We measured the perplexity after initialization before fine-tuning as sanity check.
+    Load a pretrained model, quantized it to 4-bit or 2-bit, initialize the lora adapter specified by `adapter_init`, save the base model and the initialized adapter
 
-    *: 4-bit:
-        loftq, 4-bit
-            1 iter:  ppl = 8.3574939161191
-            2 iters: ppl = 8.352068320988458
-            3 iters: ppl = 8.349460638357831
-            4 iters: ppl = 8.348115802592645
-            5 iters: ppl = 8.348127931271831
-
-        loqer, 4-bit ppl = 8.310657814102111
-
-    *: 2-bit:
-        loftq, 2-bit
-            1 iter:  ppl = 80.41665261056761
-            2 iters: ppl = 137745.25699722476
-            3 iters: ppl = 141260.56222336058
-            4 iters: ppl = 143592.7901237662
-            5 iters: ppl = 145648.63265452045
-
-            Interestingly, for some layers, the approximation error of loftq decreases with more iterations, but the rest of the layers decrease first and then increase.
-            For example, model.layers.7.mlp.gate_proj,    f-norm of approximation error over 5 iterations [35.5290412902832, 33.894344329833984, 33.31197738647461, 33.06462478637695, 32.95921325683594]
-                         model.layers.3.self_attn.v_proj, f-norm of approximation error over 5 iterations [4.079835414886475, 3.8148927688598633, 3.803752899169922, 3.8422060012817383, 3.8932950496673584]
-
-        loqer, 2-bit ppl = 8.886483023661881
+    - For 4-bit qLoRA, the bnb config and lora config are saved; adapters should be randomly initialized in the training script
+    - For 2-bit qLoRA, the quantized base model and lora config are saved; adapters should be randomly initialized in the training script
+    - For 2/4-bit LoftQ, both the quantized base model and the adapter are saved
+    - For 2/4-bit Loqer, both the quantized base model and the adapter are saved
     """
     assert adapter_init in ["loftq", "loqer", "qlora"]
     assert bnb_n_bits in [2, 4]
@@ -236,6 +217,7 @@ def adapt_and_save_clm_model(
     else:
         raise ValueError(f"Invalid adapter init: {adapter_init}")
 
+    post_init_ppl = None
     if peek_post_init_metrics:
         peft_model.eval()
         # peft_model.cuda()
@@ -244,9 +226,9 @@ def adapt_and_save_clm_model(
             eval_dataloader=calibration_dataloader,
             num_samples=loqer_num_calibration_samples,
             progress_bar=True,
-            description="Evaluating post initialization QLoRA",
+            description="Evaluating post initialization",
         )
-        logger.info(f"Post initialization perplexity (qLoRA):\n{pformat(post_init_ppl, sort_dicts=False)}")
+        logger.info(f"Post initialization perplexity:\n{pformat(post_init_ppl, sort_dicts=False)}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     if adapter_init in ["loftq", "loqer"]:
@@ -272,8 +254,8 @@ def adapt_and_save_clm_model(
         with open(output_dir / "bnb_config.yaml", "w") as f:
             yaml.safe_dump(bnb_config_dict, f)
 
-    if elapsed is not None or error_dict is not None:
-        results = {"initialization_time": elapsed, "error_dict": error_dict}
+    if elapsed is not None or error_dict is not None or post_init_ppl is not None:
+        results = {"initialization_time": elapsed, "error_dict": error_dict, "post_init_ppl": post_init_ppl}
         with open(output_dir / "adapt_and_save_results.yaml", "w") as f:
             yaml.safe_dump(results, f)
 
@@ -298,8 +280,13 @@ def adapt_and_save_cls_model(
     device_map: str,
     num_workers: int,
     overwrite_output_dir: bool,
+    overwrite_dataset_cache: bool,
+    loqer_scaling_mode: str,
+    peek_post_init_metrics: bool,
 ):
-    LOQER_SCALING_MODE = "diag"
+    assert adapter_init in ["loftq", "loqer", "qlora"]
+    assert bnb_n_bits in [2, 4]
+    assert loqer_scaling_mode in ["diag", "rxx"]
 
     output_dir = Path(output_dir)
     if output_dir.exists():
@@ -309,8 +296,9 @@ def adapt_and_save_cls_model(
             logger.warning(f"⚠️ Output directory {output_dir} already exists and will be overwritten")
             shutil.rmtree(output_dir, ignore_errors=True)
 
-    raise NotImplementedError("adapt_and_save_cls_model is not implemented yet")
-    # TODO
+    # LoQER calibration
+    scale_dict = None
+    calibration_dataloader = None
 
 
 def adapt_and_save_pipeline():
@@ -319,13 +307,22 @@ def adapt_and_save_pipeline():
     parser.add_argument("model_name_or_path", type=str)
     parser.add_argument("adapter_init", type=str, choices=["loftq", "loqer", "qlora"])
     parser.add_argument("output_dir", type=str)
-    parser.add_argument("--loqer-calibration-set", type=str, default="wikitext2_peft", help="Default: wikitext2_peft")
+    parser.add_argument(
+        "--loqer-calibration-set", type=str, default=None, help="Default: wikitext2_peft for clm, required for cls"
+    )
     parser.add_argument("--loqer-num-calibration-samples", type=int, default=128)
     parser.add_argument("--loqer-calibration-batch-size", type=int, default=2)
     parser.add_argument("--loqer-max-seq-length", type=int, default=2048)
     parser.add_argument("--loqer-scaling-mode", type=str, default="diag", help="Default: diag", choices=["diag", "rxx"])
     parser.add_argument("--loftq-num-iters", type=int, default=1, help="Default: 1")
-    parser.add_argument("--bnb-quant-type", type=str, default="fp4", help="Default: fp4", choices=["nf4", "fp4"])
+    parser.add_argument(
+        "--bnb-quant-type",
+        type=str,
+        default="fp4",
+        help="Default: fp4",
+        choices=["nf4", "fp4"],
+        help="quantization type for the frozen weights. Here 'nf4' and 'fp4' only mean normal float and floating-point. The bit-width should be specified by --bnb-n-bits",
+    )
     parser.add_argument("--bnb-n-bits", type=int, default=4, help="Default: 4", choices=[2, 4])
     parser.add_argument("--lora-rank", type=int, default=64, help="Default: 64")
     parser.add_argument("--lora-alpha", type=float, default=128.0, help="Default: 128.0")

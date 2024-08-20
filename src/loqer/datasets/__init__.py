@@ -7,24 +7,29 @@ from .wikitext2 import get_raw_data_module_wikitext2, preprocess_data_module_wik
 from .slim_pajama import get_raw_data_module_slim_pajama_6b, preprocess_data_module_slim_pajama_6b
 from .wikitext2_peft import get_raw_data_module_wikitext2_peft, preprocess_data_module_wikitext2_peft
 from .slim_pajama_6b_peft import get_raw_data_module_slimpajama_6b_peft, preprocess_data_module_slimpajama_6b_peft
+from .glue_peft import get_raw_data_module_glue_peft, preprocess_data_module_glue_peft
+from .glue_peft import TASK_TO_KEYS as GLUE_TASK_TO_KEYS
 
 logger = logging.getLogger(__name__)
 
 
 def get_raw_data_module(name: str) -> hf_datasets.DatasetDict:
-    match name:
-        case "wikitext2":
-            return get_raw_data_module_wikitext2()
-        case "slim_pajama_6b":
-            return get_raw_data_module_slim_pajama_6b()
-        case "gsm8k":
-            return get_raw_data_module_gsm8k()
-        case "wikitext2_peft":
-            return get_raw_data_module_wikitext2_peft()
-        case "slim_pajama_6b_peft":
-            return get_raw_data_module_slimpajama_6b_peft()
-        case _:
-            raise ValueError(f"task {name} not supported")
+    glue_tasks = [f"glue,{task}_peft" for task in GLUE_TASK_TO_KEYS.keys()]
+    if name == "wikitext2":
+        return get_raw_data_module_wikitext2()
+    elif name == "slim_pajama_6b":
+        return get_raw_data_module_slim_pajama_6b()
+    elif name == "gsm8k":
+        return get_raw_data_module_gsm8k()
+    elif name == "wikitext2_peft":
+        return get_raw_data_module_wikitext2_peft()
+    elif name == "slim_pajama_6b_peft":
+        return get_raw_data_module_slimpajama_6b_peft()
+    elif name in glue_tasks:
+        # "glue,subtask_peft"
+        return get_raw_data_module_glue_peft(name.split(",")[1])
+    else:
+        raise ValueError(f"task {name} not supported")
 
 
 def preprocess_data_module(
@@ -96,28 +101,41 @@ def preprocess_data_module_for_peft(
     tokenizer,
     max_length: int,
     num_proc: int,
+    model_config,
+    pad_to_max_length: bool,
     overwrite_cache: bool = False,
 ) -> hf_datasets.DatasetDict:
     """Preprocess for PEFT training/evaluation"""
-    match name:
-        case "wikitext2_peft":
-            return preprocess_data_module_wikitext2_peft(
-                raw_dataset_dict,
-                tokenizer=tokenizer,
-                max_length=max_length,
-                num_proc=num_proc,
-                overwrite_cache=overwrite_cache,
-            )
-        case "slim_pajama_6b_peft":
-            return preprocess_data_module_slimpajama_6b_peft(
-                raw_dataset_dict,
-                tokenizer=tokenizer,
-                max_length=max_length,
-                num_proc=num_proc,
-                overwrite_cache=overwrite_cache,
-            )
-        case _:
-            raise ValueError(f"task {name} not supported")
+    glue_tasks = [f"glue,{task}_peft" for task in GLUE_TASK_TO_KEYS.keys()]
+    if name == "wikitext2_peft":
+        return preprocess_data_module_wikitext2_peft(
+            raw_dataset_dict,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            num_proc=num_proc,
+            overwrite_cache=overwrite_cache,
+        )
+    elif name == "slim_pajama_6b_peft":
+        return preprocess_data_module_slimpajama_6b_peft(
+            raw_dataset_dict,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            num_proc=num_proc,
+            overwrite_cache=overwrite_cache,
+        )
+    elif name in glue_tasks:
+        # "glue,subtask_peft"
+        return preprocess_data_module_glue_peft(
+            name.split(",")[1],
+            raw_dataset_dict,
+            tokenizer=tokenizer,
+            model_config=model_config,
+            pad_to_max_length=pad_to_max_length,
+            max_length=max_length,
+            overwrite_cache=overwrite_cache,
+        )
+    else:
+        raise ValueError(f"task {name} not supported")
 
 
 def get_data_module_for_peft(
