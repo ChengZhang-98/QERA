@@ -27,7 +27,7 @@ def get_raw_data_module(name: str) -> hf_datasets.DatasetDict:
         return get_raw_data_module_slimpajama_6b_peft()
     elif name in glue_tasks:
         # "glue,subtask_peft"
-        return get_raw_data_module_glue_peft(name.split(",")[1])
+        return get_raw_data_module_glue_peft(name.split(",")[1].removesuffix("_peft"))
     else:
         raise ValueError(f"task {name} not supported")
 
@@ -126,7 +126,7 @@ def preprocess_data_module_for_peft(
     elif name in glue_tasks:
         # "glue,subtask_peft"
         return preprocess_data_module_glue_peft(
-            name.split(",")[1],
+            name.split(",")[1].removesuffix("_peft"),
             raw_dataset_dict,
             tokenizer=tokenizer,
             model_config=model_config,

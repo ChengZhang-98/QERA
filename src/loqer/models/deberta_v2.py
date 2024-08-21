@@ -3,9 +3,9 @@ from copy import deepcopy
 
 from torch import nn
 from transformers.models.deberta_v2.modeling_deberta_v2 import (
-    DebertaV2Model,
     DebertaV2Layer,
     DebertaV2Encoder,
+    DebertaV2ForSequenceClassification,
 )
 
 from ..quantize import get_quantized_layer_cls
@@ -14,11 +14,11 @@ from ..utils import find_matched_pattern, get_layer_name, set_layer_by_name
 logger = logging.getLogger(__name__)
 
 
-def build_loqer_config_deberta_v2(model: DebertaV2Model, loqer_config: dict):
-    assert isinstance(model, DebertaV2Model)
+def build_loqer_config_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config: dict):
+    assert isinstance(model, DebertaV2ForSequenceClassification)
     parsed_config = {}
 
-    encoder: DebertaV2Encoder = model.encoder
+    encoder: DebertaV2Encoder = model.deberta.encoder
 
     for module in encoder.modules():
         if not isinstance(module, nn.Linear):
@@ -34,11 +34,11 @@ def build_loqer_config_deberta_v2(model: DebertaV2Model, loqer_config: dict):
     return parsed_config
 
 
-def quantize_deberta_v2(model: DebertaV2Model, loqer_config: dict):
-    assert isinstance(model, DebertaV2Model)
+def quantize_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config: dict):
+    assert isinstance(model, DebertaV2ForSequenceClassification)
     loqer_config = build_loqer_config_deberta_v2(model, loqer_config)
 
-    for module in model.encoder.modules():
+    for module in model.deberta.encoder.modules():
         if not isinstance(module, nn.Linear):
             continue
 
@@ -58,13 +58,13 @@ def quantize_deberta_v2(model: DebertaV2Model, loqer_config: dict):
     return model
 
 
-def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2Model):
-    assert isinstance(model, DebertaV2Model)
+def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2ForSequenceClassification):
+    assert isinstance(model, DebertaV2ForSequenceClassification)
     assert model.config._attn_implementation == "eager"
     layers_to_register = []
 
     decoder_layer: DebertaV2Layer
-    for decoder_layer in model.encoder.layer:
+    for decoder_layer in model.deberta.encoder.layer:
         k_name = get_layer_name(model, decoder_layer.attention.self.key_proj)
         q_name = get_layer_name(model, decoder_layer.attention.self.query_proj)
         v_name = get_layer_name(model, decoder_layer.attention.self.value_proj)
@@ -82,10 +82,10 @@ def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2Model):
     return layers_to_register
 
 
-def find_layers_to_approximate_deberta_v2(model: DebertaV2Model):
-    assert isinstance(model, DebertaV2Model)
+def find_layers_to_approximate_deberta_v2(model: DebertaV2ForSequenceClassification):
+    assert isinstance(model, DebertaV2ForSequenceClassification)
     layers_to_approximate = []
-    for layer_name, layer in model.encoder.layer.named_modules():
+    for layer_name, layer in model.deberta.encoder.layer.named_modules():
         if not isinstance(layer, nn.Linear):
             continue
         layers_to_approximate.append(layer_name)
