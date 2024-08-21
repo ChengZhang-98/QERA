@@ -1,13 +1,11 @@
 import tqdm
 import torch
-from torch.utils.data import DataLoader
-import transformers
-from transformers import BitsAndBytesConfig
 import bitsandbytes as bnb
-from peft import get_peft_model, LoraConfig
-from peft.utils.loftq_utils import is_bnb_4bit_available, _SafetensorLoader, NFQuantizer
+from peft.utils.loftq_utils import _SafetensorLoader, NFQuantizer
 from peft.tuners.lora import Linear4bit
 from peft.tuners.lora.layer import Linear as LoraLinear
+
+from ..quantize.quantizers import mxint_quantizer
 
 
 def _low_rank_decomposition_loftq(weight, reduced_rank=32):
@@ -31,6 +29,9 @@ def _low_rank_decomposition_loftq(weight, reduced_rank=32):
 
 @torch.no_grad()
 def init_lora_loftq_4bit(qweight, weight: torch.Tensor, num_iters: int, reduced_rank: int, compute_device):
+    """
+    Update quantized weight and LoRA weights in a BitsAndBytes 4-bit Lora layer
+    """
     compute_device = "cuda" if compute_device is None else compute_device
     assert compute_device != "cpu"
 
@@ -51,16 +52,6 @@ def init_lora_loftq_4bit(qweight, weight: torch.Tensor, num_iters: int, reduced_
             blocksize=quant_state.blocksize,
         ).to(compute_device)
         dequantized_weight = bnb.functional.dequantize_4bit(qweight.data, quant_state)
-        # else:
-        #     quantizer = NFQuantizer(
-        #         num_bits=num_bits,
-        #         device=compute_device,
-        #         method="normal" if quant_state.quant_type == "nf4" else "uniform",
-        #         block_size=quant_state.blocksize,
-        #     )
-        #     residual = residual.to(device=compute_device, dtype=torch.float32)
-        #     qweight, max_abs, shape = quantizer.quantize_block(residual)
-        #     dequantized_weight = quantizer.dequantize_block(qweight, max_abs, shape)
 
         weight = weight.to(device=compute_device, dtype=torch.float32)
         dequantized_weight = dequantized_weight.to(device=compute_device, dtype=torch.float32)
@@ -133,7 +124,10 @@ def replace_lora_weights_loftq_4bit(
 
 
 @torch.no_grad()
-def init_lora_loftq_2bit(weight: torch.Tensor, bnb_quant_type: str, num_iters, reduced_rank: int, compute_device):
+def init_lora_loftq_2bit_bnb(weight: torch.Tensor, bnb_quant_type: str, num_iters, reduced_rank: int, compute_device):
+    """
+    Emulated 2-bit BitsAndBytes
+    """
     compute_device = "cuda" if compute_device is None else compute_device
     assert compute_device != "cpu"
     ori_weight_dtype = weight.dtype
@@ -161,13 +155,50 @@ def init_lora_loftq_2bit(weight: torch.Tensor, bnb_quant_type: str, num_iters, r
     return lora_A, lora_B, dequantized_weight.to(ori_weight_dtype), error_f_norm
 
 
-def replace_lora_weights_loftq_2bit(
-    peft_model, bnb_quant_type, adapter_name="default", num_iters: int = 1, compute_device=None
+@torch.no_grad()
+def init_lora_loftq_kbit_mxint(
+    weight: torch.Tensor, num_bits: int, num_iters: int, reduced_rank: int, compute_device, block_size
+):
+    """
+    Emulated k-bit MXInt
+    """
+    compute_device = "cuda" if compute_device is None else compute_device
+    assert compute_device != "cpu"
+    ori_weight_dtype = weight.dtype
+
+    residual = weight.clone().to(device=compute_device, dtype=torch.float32)
+    weight = weight.to(device=compute_device, dtype=torch.float32)
+    error_f_norm = []
+
+    for i in range(num_iters):
+        quantized_weight = mxint_quantizer(residual, width=num_bits, block_size=block_size, block_axis=-1)
+        residual = weight - quantized_weight
+
+        torch.cuda.empty_cache()
+        output = _low_rank_decomposition_loftq(residual, reduced_rank)
+        L, R = output["L"], output["R"]
+        residual = weight - torch.mm(L, R)
+        error_f_norm.append(output["error_f_norm"])
+
+    lora_A, lora_B = R, L
+    return lora_A, lora_B, quantized_weight.to(ori_weight_dtype), error_f_norm
+
+
+def replace_lora_weights_loftq_kbit(
+    peft_model,
+    quant_type,
+    num_bits: int,
+    adapter_name="default",
+    num_iters: int = 1,
+    compute_device=None,
+    mxint_block_size=32,
 ):
     """
     Emulated 2-bit loftq
     """
-    assert bnb_quant_type in ["normal", "uniform"]
+    assert quant_type in ["nf", "fp", "mxint"]
+    if quant_type in ["nf", "fp"]:
+        assert num_bits == 2
     prefix = "base_model.model."
 
     named_modules = {name: module for name, module in peft_model.named_modules()}
@@ -181,13 +212,23 @@ def replace_lora_weights_loftq_2bit(
 
         reduced_rank = module.r[adapter_name]
 
-        lora_A, lora_B, new_weight, error_f_norm = init_lora_loftq_2bit(
-            weight=module.weight,
-            bnb_quant_type=bnb_quant_type,
-            num_iters=num_iters,
-            reduced_rank=reduced_rank,
-            compute_device=compute_device,
-        )
+        if quant_type in ["normal", "uniform"]:
+            lora_A, lora_B, new_weight, error_f_norm = init_lora_loftq_2bit_bnb(
+                weight=module.weight,
+                bnb_quant_type="normal" if quant_type == "nf" else "uniform",
+                num_iters=num_iters,
+                reduced_rank=reduced_rank,
+                compute_device=compute_device,
+            )
+        else:
+            lora_A, lora_B, new_weight, error_f_norm = init_lora_loftq_kbit_mxint(
+                weight=module.weight,
+                num_bits=num_bits,
+                num_iters=num_iters,
+                reduced_rank=reduced_rank,
+                compute_device=compute_device,
+                block_size=mxint_block_size,
+            )
         error_dict[name] = error_f_norm
 
         module.lora_A[adapter_name].weight.data = lora_A
@@ -246,17 +287,6 @@ def init_lora_loqer_4bit(qweight, weight: torch.Tensor, scale: torch.Tensor, red
 
     quant_state = qweight.quant_state
     dequantized_weight = bnb.functional.dequantize_4bit(qweight.data, quant_state)
-
-    # if num_bits == 2:
-    #     # quantize the value to 2-bit, though the format is still 4-bit
-    #     quantizer = NFQuantizer(
-    #         num_bits=num_bits,
-    #         device=compute_device,
-    #         method="normal" if quant_state.quant_type == "nf4" else "uniform",
-    #         block_size=quant_state.blocksize,
-    #     )
-    #     qweight, max_abs, shape = quantizer.quantize_block(dequantized_weight)
-    #     dequantized_weight = quantizer.dequantize_block(qweight, max_abs, shape)
 
     dequantized_weight = dequantized_weight.to(device=compute_device, dtype=torch.float32)
     weight = weight.to(device=compute_device, dtype=torch.float32)
@@ -317,7 +347,7 @@ def replace_lora_weights_loqer_4bit(
 
 
 @torch.no_grad()
-def init_lora_loqer_2bit(
+def init_lora_loqer_2bit_bnb(
     weight: torch.Tensor, scale: torch.Tensor, bnb_quant_type: str, reduced_rank: int, compute_deivce
 ):
     assert scale.ndim in [1, 2]
@@ -349,12 +379,44 @@ def init_lora_loqer_2bit(
     return lora_A, lora_B, dequantized_weight.to(orig_weight_dtype), error_f_norm
 
 
-def replace_lora_weight_loqer_2bit(peft_model, bnb_quant_type, scale_dict, adapter_name="default", compute_device=None):
+@torch.no_grad()
+def init_lora_loqer_kbit_mxint(
+    weight: torch.Tensor, scale: torch.Tensor, num_bits: int, reduced_rank: int, compute_device, block_size
+):
+    assert scale.ndim in [1, 2]
+    assert scale.shape[0] == weight.shape[1]
+    compute_device = "cuda" if compute_device is None else compute_device
+
+    orig_weight_dtype = weight.dtype
+    orig_weight = weight.clone().to(device=compute_device, dtype=torch.float32)
+
+    if scale.ndim == 1:
+        scale = torch.diag(scale)
+
+    quantized_weight = mxint_quantizer(weight, width=num_bits, block_size=block_size, block_axis=-1)
+    scale = scale.to(device=compute_device, dtype=torch.float32)
+
+    residual = orig_weight - quantized_weight
+    residual_scaled = residual @ scale
+
+    torch.cuda.empty_cache()
+    L, R_, error_f_norm = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
+    R = torch.linalg.solve(scale, R_.T).T
+
+    lora_A, lora_B = R, L
+    return lora_A, lora_B, quantized_weight.to(orig_weight_dtype), error_f_norm
+
+
+def replace_lora_weight_loqer_kbit(
+    peft_model, scale_dict, quant_type, num_bits: int, adapter_name="default", compute_device=None, mxint_block_size=32
+):
     """
     Emulated 2-bit loqer
     """
 
-    assert bnb_quant_type in ["normal", "uniform"]
+    assert quant_type in ["nf", "fp", "mxint"]
+    if quant_type in ["fp", "nf"]:
+        assert num_bits == 2
     prefix = "base_model.model."
 
     named_modules = {name: module for name, module in peft_model.named_modules()}
@@ -370,13 +432,23 @@ def replace_lora_weight_loqer_2bit(peft_model, bnb_quant_type, scale_dict, adapt
         name = name[len(prefix) :]
         scale = scale_dict[name]
 
-        lora_A, lora_B, new_weight, error_f_norm = init_lora_loqer_2bit(
-            weight=module.weight,
-            scale=scale,
-            bnb_quant_type=bnb_quant_type,
-            reduced_rank=reduced_rank,
-            compute_deivce=module.weight.device if compute_device is None else compute_device,
-        )
+        if quant_type in ["nf", "fp"]:
+            lora_A, lora_B, new_weight, error_f_norm = init_lora_loqer_2bit_bnb(
+                weight=module.weight,
+                scale=scale,
+                bnb_quant_type="normal" if quant_type == "nf" else "uniform",
+                reduced_rank=reduced_rank,
+                compute_deivce=module.weight.device if compute_device is None else compute_device,
+            )
+        else:
+            lora_A, lora_B, new_weight, error_f_norm = init_lora_loqer_kbit_mxint(
+                weight=module.weight,
+                scale=scale,
+                num_bits=num_bits,
+                reduced_rank=reduced_rank,
+                compute_device=module.weight.device if compute_device is None else compute_device,
+                block_size=mxint_block_size,
+            )
         error_dict[name] = [error_f_norm]
 
         module.lora_A[adapter_name].weight.data = lora_A
@@ -387,7 +459,7 @@ def replace_lora_weight_loqer_2bit(peft_model, bnb_quant_type, scale_dict, adapt
 
 
 @torch.no_grad()
-def init_lora_qlora_2bit(weight: torch.Tensor, bnb_quant_type: str, compute_device):
+def init_lora_qlora_2bit_bnb(weight: torch.Tensor, bnb_quant_type: str, compute_device):
     compute_device = "cuda" if compute_device is None else compute_device
     assert compute_device != "cpu"
     ori_weight_dtype = weight.dtype
@@ -406,8 +478,26 @@ def init_lora_qlora_2bit(weight: torch.Tensor, bnb_quant_type: str, compute_devi
 
 
 @torch.no_grad()
-def replace_lora_weight_qlora_2bit(peft_model, bnb_quant_type, compute_device=None):
-    assert bnb_quant_type in ["normal", "uniform"]
+def init_lora_qlora_kbit_mxint(weight: torch.Tensor, num_bits: int, compute_device, block_size):
+    compute_device = "cuda" if compute_device is None else compute_device
+    assert compute_device != "cpu"
+    ori_weight_dtype = weight.dtype
+    ori_weight = weight.clone().to(device=compute_device, dtype=torch.float32)
+    weight = weight.to(device=compute_device, dtype=torch.float32)
+
+    quantized_weight = mxint_quantizer(weight, width=num_bits, block_size=block_size, block_axis=-1)
+
+    error_f_norm = [torch.linalg.norm(ori_weight - quantized_weight, ord="fro").cpu().item()]
+
+    quantized_weight = quantized_weight.to(ori_weight_dtype)
+    return quantized_weight, error_f_norm
+
+
+@torch.no_grad()
+def replace_lora_weight_qlora_kbit(peft_model, quant_type, num_bits: int, compute_device=None, mxint_block_size=32):
+    assert quant_type in ["nf", "fp", "mxint"]
+    if quant_type in ["nf", "fp"]:
+        assert num_bits == 2
     prefix = "base_model.model."
 
     named_modules = {name: module for name, module in peft_model.named_modules()}
@@ -421,11 +511,19 @@ def replace_lora_weight_qlora_2bit(peft_model, bnb_quant_type, compute_device=No
 
         name = name[len(prefix) :]
 
-        new_qweight, error_f_norm = init_lora_qlora_2bit(
-            weight=module.weight,
-            bnb_quant_type=bnb_quant_type,
-            compute_device=module.weight.device if compute_device is None else compute_device,
-        )
+        if quant_type in ["nf", "fp"]:
+            new_qweight, error_f_norm = init_lora_qlora_2bit_bnb(
+                weight=module.weight,
+                bnb_quant_type="normal" if quant_type == "nf" else "uniform",
+                compute_device=module.weight.device if compute_device is None else compute_device,
+            )
+        else:
+            new_qweight, error_f_norm = init_lora_qlora_kbit_mxint(
+                weight=module.weight,
+                num_bits=num_bits,
+                compute_device=module.weight.device if compute_device is None else compute_device,
+                block_size=mxint_block_size,
+            )
         error_dict[name] = error_f_norm
 
         module.weight.data = new_qweight

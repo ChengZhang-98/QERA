@@ -204,14 +204,17 @@ def parse_args():
         action="store_true",
         help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
     )
-    parser.add_argument(
-        "--lora_init_method",
-        type=str,
-        required=True,
-        choices=["full-finetune", "lora", "qlora,2", "loftq,2", "loqer,2", "qlora,4", "loftq,4", "loqer,4"],
-    )
-    parser.add_argument("--bnb_config_yaml", type=str, default=None)  # this is required by loqer, qlora, and loftq
-    parser.add_argument("--lora_adapter_dir", type=str, default=None)
+
+    # *: custom arguments
+    # parser.add_argument(
+    #     "--lora_init_method",
+    #     type=str,
+    #     required=True,
+    #     choices=["full-finetune", "lora", "qlora,2", "loftq,2", "loqer,2", "qlora,4", "loftq,4", "loqer,4"],
+    # )
+    # parser.add_argument("--bnb_config_yaml", type=str, default=None)  # this is required by loqer, qlora, and loftq
+    parser.add_argument("--lora_adapter_dir", type=str, default=None, help="'NA' for full-finetune")
+    # parser.add_argument("--load-adapter-config-only", type=str, default=None, choices=["true", "false"])
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--use_gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--config_name", type=str, default=None)
@@ -233,25 +236,39 @@ def parse_args():
     if args.push_to_hub:
         assert args.output_dir is not None, "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
 
+    if args.lora_adapter_dir is not None and args.lora_adapter_dir == "NA":
+        args.lora_adapter_dir = None
+    """
+    full-finetune: nothing
+    lora: lora_adapter_dir/adapter_config.json [load full model, load adapter]
+    qlora:
+        - 4bit, nf, fp: base_model_dir, lora_adapter_dir [load bnb base model, load adapter]
+        - 4bit, mxint: base_model_dir, lora_adapter_dir [load emulated base model, load adapter]
+        - kbit: base_model_dir, lora_adapter_dir [load emulated base model, load adapter]
+    loftq/loqer:
+        - 4bit, nf, fp: base_model_dir, lora_adapter_dir, [load bnb base model, load adapter]
+        - kbit: base_model_dir, lora_adapter_dir [load emulated base model, load adapter]
+    """
+
     # fmt: off
-    if args.lora_init_method == "full-finetune":
-        pass
-    elif args.lora_init_method == "lora":
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    elif args.lora_init_method == "qlora,4":
-        assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    elif args.lora_init_method == "loftq,4":
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    elif args.lora_init_method == "loqer,4":
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    elif args.lora_init_method in ["qlora,2", "loftq,2", "loqer,2"]:
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    else:
-        raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
+    # if args.lora_init_method == "full-finetune":
+    #     pass
+    # elif args.lora_init_method == "lora":
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    # elif args.lora_init_method == "qlora,4":
+    #     assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    # elif args.lora_init_method == "loftq,4":
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    # elif args.lora_init_method == "loqer,4":
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    # elif args.lora_init_method in ["qlora,2", "loftq,2", "loqer,2"]:
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    # else:
+    #     raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
     # fmt: on
 
     return args
@@ -386,70 +403,107 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     config.pad_token_id = tokenizer.pad_token_id
 
-    model_kwargs = {
-        "from_tf": bool(".ckpt" in args.model_name_or_path),
-        "config": config,
-        "ignore_mismatched_sizes": args.ignore_mismatched_sizes,
-        "trust_remote_code": args.trust_remote_code,
-    }
-    if args.lora_init_method == "full-finetune":
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-    elif args.lora_init_method == "lora":
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-        with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-            lora_config_dict = json.load(f)
-        lora_config_dict["inference_mode"] = False
-        lora_config = LoraConfig(**lora_config_dict)
-        model = get_peft_model(model, lora_config)
-    elif args.lora_init_method == "qlora,4":
-        with open(args.bnb_config_yaml, "r") as f:
-            bnb_config_dict = yaml.safe_load(f)
-        bnb_config = BitsAndBytesConfig(**bnb_config_dict)
-        model_kwargs["quantization_config"] = bnb_config
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.use_gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": True},
-        )
-        with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-            lora_config_dict = json.load(f)
-        lora_config_dict["inference_mode"] = False
-        lora_config = LoraConfig(**lora_config_dict)
-        model = get_peft_model(model, lora_config)
-    elif args.lora_init_method == "loftq,4":
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.use_gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": True},
-        )
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    elif args.lora_init_method == "loqer,4":
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.use_gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": True},
-        )
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    elif args.lora_init_method == "qlora,2":
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-        with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-            lora_config_dict = json.load(f)
-        lora_config_dict["inference_mode"] = False
-        lora_config = LoraConfig(**lora_config_dict)
-        model = get_peft_model(model, lora_config)
-    elif args.lora_init_method in ["loftq,2", "loqer,2"]:
-        model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    else:
-        raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
+    # model_kwargs = {
+    #     "from_tf": bool(".ckpt" in args.model_name_or_path),
+    #     "config": config,
+    #     "ignore_mismatched_sizes": args.ignore_mismatched_sizes,
+    #     "trust_remote_code": args.trust_remote_code,
+    # }
+    # if args.lora_init_method == "full-finetune":
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
+    # elif args.lora_init_method == "lora":
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
+    #     with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
+    #         lora_config_dict = json.load(f)
+    #     lora_config_dict["inference_mode"] = False
+    #     lora_config = LoraConfig(**lora_config_dict)
+    #     model = get_peft_model(model, lora_config)
+    # elif args.lora_init_method == "qlora,4":
+    #     with open(args.bnb_config_yaml, "r") as f:
+    #         bnb_config_dict = yaml.safe_load(f)
+    #     bnb_config = BitsAndBytesConfig(**bnb_config_dict)
+    #     model_kwargs["quantization_config"] = bnb_config
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
+    #     model = prepare_model_for_kbit_training(
+    #         model,
+    #         use_gradient_checkpointing=args.use_gradient_checkpointing,
+    #         gradient_checkpointing_kwargs={"use_reentrant": True},
+    #     )
+    #     with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
+    #         lora_config_dict = json.load(f)
+    #     lora_config_dict["inference_mode"] = False
+    #     lora_config = LoraConfig(**lora_config_dict)
+    #     model = get_peft_model(model, lora_config)
+    # elif args.lora_init_method == "loftq,4":
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
+    #     model = prepare_model_for_kbit_training(
+    #         model,
+    #         use_gradient_checkpointing=args.use_gradient_checkpointing,
+    #         gradient_checkpointing_kwargs={"use_reentrant": True},
+    #     )
+    #     model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+    # elif args.lora_init_method == "loqer,4":
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
+    #     model = prepare_model_for_kbit_training(
+    #         model,
+    #         use_gradient_checkpointing=args.use_gradient_checkpointing,
+    #         gradient_checkpointing_kwargs={"use_reentrant": True},
+    #     )
+    #     model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+    # elif args.lora_init_method == "qlora,2":
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
+    #     with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
+    #         lora_config_dict = json.load(f)
+    #     lora_config_dict["inference_mode"] = False
+    #     lora_config = LoraConfig(**lora_config_dict)
+    #     model = get_peft_model(model, lora_config)
+    # elif args.lora_init_method in ["loftq,2", "loqer,2"]:
+    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
+    #     model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+    # else:
+    #     raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
 
-    if args.lora_init_method != "full-finetune":
+    # if args.lora_init_method != "full-finetune":
+    #     trainable_params, all_param = model.get_nb_trainable_parameters()
+    #     logger.info(
+    #         f"🔍 trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}"
+    #     )
+
+    model = AutoModelForSequenceClassification.from_pretrained(
+        args.model_name_or_path, trust_remote_code=args.trust_remote_code
+    )
+
+    _model_loaded_from_local = False
+    if Path(args.model_name_or_path).exists():
+        _model_loaded_from_local = True
+
+    _model_is_bnb_quantized = False
+    if hasattr(model, "is_quantized") and model.is_quantized:
+        _model_is_bnb_quantized = True
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.use_gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
+        )
+
+    _adapter_is_applied = False
+    if args.lora_adapter_dir is not None:
+        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+        _adapter_is_applied = True
+
+    logger.info(f"🔍 model loaded from local: {_model_loaded_from_local}")
+    logger.info(f"🔍 model is bnb quantized: {_model_is_bnb_quantized} (emulated quantization is possible if False)")
+    logger.info(f"🔍 adapter is applied: {_adapter_is_applied}")
+
+    if _adapter_is_applied:
         trainable_params, all_param = model.get_nb_trainable_parameters()
         logger.info(
             f"🔍 trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}"
+        )
+    else:
+        logger.info(
+            f"🔍 Full-finetune: all params: {model.num_parameters()}, trainable: {model.num_parameters(only_trainable=True)}"
         )
 
     # Preprocessing the datasets
