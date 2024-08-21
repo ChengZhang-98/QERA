@@ -40,8 +40,8 @@ def adapt_and_save_clm_model(
     loqer_calibration_batch_size: int,
     loqer_max_seq_length: int,
     loftq_num_iters: int,
-    bnb_quant_type: str,
-    bnb_n_bits: int,
+    quant_type: str,
+    quant_bits: int,
     lora_rank: int,
     lora_alpha: float,
     lora_target_modules: list[str],
@@ -51,6 +51,8 @@ def adapt_and_save_clm_model(
     overwrite_dataset_cache: bool,
     loqer_scaling_mode: str,
     peek_post_init_metrics: bool,
+    lora_modules_to_save: list[str],
+    mxint_block_size: int,
 ):
     """
     Load a pretrained model, quantized it to 4-bit or 2-bit, initialize the lora adapter specified by `adapter_init`, save the base model and the initialized adapter
@@ -61,9 +63,9 @@ def adapt_and_save_clm_model(
     - For 2/4-bit Loqer, both the quantized base model and the adapter are saved
     """
     assert adapter_init in ["loftq", "loqer", "qlora", "lora"]
-    assert bnb_n_bits in [2, 4]
     assert loqer_scaling_mode in ["diag", "rxx"]
-    assert bnb_quant_type in ["nf", "fp"]
+    if quant_type in ["nf", "fp"]:
+        assert quant_bits in [2, 4]
 
     output_dir = Path(output_dir)
     if output_dir.exists():
@@ -76,7 +78,7 @@ def adapt_and_save_clm_model(
     # LoQER calibration
     scale_dict = None
     calibration_dataloader = None
-    if adapter_init == "loqer":
+    if adapter_init == "loqer" or (peek_post_init_metrics and adapter_init != "lora"):
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -92,10 +94,11 @@ def adapt_and_save_clm_model(
             model = dispatch_model(model, device_map)
 
         data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-        layers_to_register_and_share = find_layers_to_register_scale_hook(model)
-        profiler_factory = register_scale_hooks(
-            model, layers_to_register_and_share, mode=loqer_scaling_mode, torch_dtype=torch.float32
-        )
+        if adapter_init == "loqer":
+            layers_to_register_and_share = find_layers_to_register_scale_hook(model)
+            profiler_factory = register_scale_hooks(
+                model, layers_to_register_and_share, mode=loqer_scaling_mode, torch_dtype=torch.float32
+            )
         calibration_datamodule = get_data_module_for_peft(
             loqer_calibration_set,
             tokenizer=tokenizer,
@@ -121,48 +124,33 @@ def adapt_and_save_clm_model(
             description="Calibrating scales for LoQER+",
         )
         logger.info(f"Profiling outputs:\n{pformat(profile_outputs, sort_dicts=False)}")
-        profiler_factory.remove_all_hooks()
-        scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+        if adapter_init == "loqer":
+            profiler_factory.remove_all_hooks()
+            scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
+            share_scales(scale_dict, layers_to_register_and_share)
         calibration_time = time.time() - start
-        share_scales(scale_dict, layers_to_register_and_share)
-    elif peek_post_init_metrics:
-        tokenizer = transformers.AutoTokenizer.from_pretrained(model_name_or_path)
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-        calibration_datamodule = get_data_module_for_peft(
-            loqer_calibration_set,
-            tokenizer=tokenizer,
-            max_length=loqer_max_seq_length,
-            num_workers=num_workers,
-            overwrite_cache=overwrite_dataset_cache,
-        )
-        calibration_dataloader = DataLoader(
-            calibration_datamodule["train"],
-            batch_size=loqer_calibration_batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            collate_fn=data_collator,
-        )
 
     # it seems LoftQ's NFQuantizer does not support double quantization
     bnb_config = None
-    if adapter_init in ["qlora", "loftq", "loqer"] and bnb_n_bits == 4:
-        bnb_quant_type_4bit = "nf4" if bnb_quant_type == "nf" else "fp4"
-        bnb_4bit_use_double_quant = bnb_n_bits == 4
+    if adapter_init in ["qlora", "loftq", "loqer"] and (quant_type in ["nf", "fp"] and quant_bits == 4):
+        bnb_4bit_use_double_quant = quant_bits == 4
+        bnb_quant_type_4bit = "nf4" if quant_type == "nf" else "fp4"
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
             # bnb_4bit_quant_storage=torch.bfloat16,
+            llm_int8_skip_modules=lora_modules_to_save,
         )
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     else:
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path)
-        device_map = create_device_map(model, device_map)
-        model = dispatch_model(model, device_map)
+        if "cuda" in device_map:
+            model = model.to(device_map)
+        else:
+            device_map = create_device_map(model, device_map)
+            model = dispatch_model(model, device_map)
     model.eval()
     lora_target_modules_ = lora_target_modules
     # fmt: off
@@ -178,57 +166,60 @@ def adapt_and_save_clm_model(
         lora_dropout=0.1,
         target_modules=lora_target_modules_,
         init_lora_weights=True,
+        modules_to_save=lora_modules_to_save,
     )
     peft_model = get_peft_model(model, lora_config)
     peft_model.eval()
 
     error_dict = None
     elapsed = None
-    bnb_quant_type_2bit = "normal" if bnb_quant_type == "nf" else "uniform"
     if adapter_init == "loftq":
-        if bnb_n_bits == 4:
+        if quant_bits == 4:
             start = time.time()
             error_dict = replace_lora_weights_loftq_4bit(peft_model, num_iters=loftq_num_iters)
             elapsed = time.time() - start
-        elif bnb_n_bits == 2:
+        else:
             start = time.time()
             error_dict = replace_lora_weights_loftq_kbit(
-                peft_model, quant_type=bnb_quant_type_2bit, num_iters=loftq_num_iters
+                peft_model,
+                quant_type=quant_type,
+                num_bits=quant_bits,
+                num_iters=loftq_num_iters,
+                mxint_block_size=mxint_block_size,
             )
             elapsed = time.time() - start
-        else:
-            raise NotImplementedError("LoftQ only supports 2-bit and 4-bit quantization")
     elif adapter_init == "loqer":
-        if bnb_n_bits == 4:
+        if quant_bits == 4 and quant_type in ["nf", "fp"]:
             start = time.time()
             error_dict = replace_lora_weights_loqer_4bit(peft_model, scale_dict=scale_dict)
             elapsed = time.time() - start + calibration_time
-        elif bnb_n_bits == 2:
+        else:
             start = time.time()
             error_dict = replace_lora_weight_loqer_kbit(
-                peft_model, quant_type=bnb_quant_type_2bit, scale_dict=scale_dict
+                peft_model,
+                scale_dict=scale_dict,
+                quant_type=quant_type,
+                num_bits=quant_bits,
+                mxint_block_size=mxint_block_size,
             )
             elapsed = time.time() - start + calibration_time
-        else:
-            raise NotImplementedError("LoQER only supports 2-bit and 4-bit quantization")
     elif adapter_init == "qlora":
-        if bnb_n_bits == 4:
+        if quant_bits == 4 and quant_type in ["nf", "fp"]:
             pass
-        elif bnb_n_bits == 2:
-            start = time.time()
-            error_dict = replace_lora_weight_qlora_kbit(peft_model, quant_type=bnb_quant_type_2bit)
-            elapsed = time.time() - start
         else:
-            raise NotImplementedError("QLoRA only supports 2-bit and 4-bit quantization")
+            start = time.time()
+            error_dict = replace_lora_weight_qlora_kbit(
+                peft_model, quant_type=quant_type, num_bits=quant_bits, mxint_block_size=mxint_block_size
+            )
+            elapsed = time.time() - start
     elif adapter_init == "lora":
         pass
     else:
         raise ValueError(f"Invalid adapter init: {adapter_init}")
 
     post_init_ppl = None
-    if peek_post_init_metrics:
+    if peek_post_init_metrics and adapter_init != "lora":
         peft_model.eval()
-        # peft_model.cuda()
         post_init_ppl = evaluate_perplexity(
             peft_model,
             eval_dataloader=calibration_dataloader,
@@ -239,36 +230,21 @@ def adapt_and_save_clm_model(
         logger.info(f"Post initialization perplexity ({adapter_init}):\n{pformat(post_init_ppl, sort_dicts=False)}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    if adapter_init in ["loftq", "loqer"]:
-        peft_model.save_pretrained(output_dir / "adapter")
-        logger.info(f"Adapter saved to {output_dir / 'adapter'}")
-    else:
-        # qlora, lora
-        lora_config.save_pretrained(output_dir / "adapter")
+    peft_model.save_pretrained(output_dir / "adapter")
+    logger.info(f"Adapter saved to {output_dir / 'adapter'}")
 
-    if adapter_init in ["loftq", "loqer"] or bnb_n_bits == 2:
-        base_model = peft_model.unload()
-        # save the bnb model as it is
-        base_model.save_pretrained(output_dir / "base_model")
-        logger.info(f"Base model saved to {output_dir / 'base_model'}")
-
-    if bnb_config is not None:
-        bnb_config_dict = {
-            "load_in_4bit": True,
-            "bnb_4bit_compute_dtype": "bfloat16",
-            "bnb_4bit_use_double_quant": bnb_4bit_use_double_quant,
-            "bnb_4bit_quant_type": bnb_quant_type_4bit,
-        }
-        with open(output_dir / "bnb_config.yaml", "w") as f:
-            yaml.safe_dump(bnb_config_dict, f)
+    base_model = peft_model.unload()
+    base_model.save_pretrained(output_dir / "base_model")
+    logger.info(f"Base model saved to {output_dir / 'base_model'}")
 
     if elapsed is not None or error_dict is not None or post_init_ppl is not None:
         results = {"initialization_time": elapsed, "error_dict": error_dict, "post_init_ppl": post_init_ppl}
         with open(output_dir / "adapt_and_save_results.yaml", "w") as f:
             yaml.safe_dump(results, f)
-
-    if elapsed is not None:
-        logger.info(f"Adapter initialization ({adapter_init}) completed in {elapsed:.2f} seconds")
+        results.pop("error_dict")
+        logger.info(f"Adapter initialization ({adapter_init}) completed:\n{results}")
+    else:
+        logger.info(f"Adapter initialization ({adapter_init}) completed")
 
 
 def adapt_and_save_cls_model(
@@ -352,7 +328,6 @@ def adapt_and_save_cls_model(
             collate_fn=data_collator,
         )
         start = time.time()
-
         num_samples = 0
         input_device = next(model.parameters()).device
         for i, batch in enumerate(calibration_dataloader):
@@ -547,6 +522,8 @@ def adapt_and_save_pipeline():
         if args.lora_target_modules is None:
             args.lora_target_modules = "all-linear"
             logger.warning(f" ⚠️Defaulting lora_target_modules to {args.lora_target_modules}")
+        if args.lora_modules_to_save is None:
+            logger.warning(f" ⚠️Defaulting lora_modules_to_save to 'None'")
         adapt_and_save_clm_model(
             args.model_name_or_path,
             adapter_init=args.adapter_init,
@@ -556,17 +533,19 @@ def adapt_and_save_pipeline():
             loqer_calibration_batch_size=args.loqer_calibration_batch_size,
             loqer_max_seq_length=args.loqer_max_seq_length,
             loftq_num_iters=args.loftq_num_iters,
-            bnb_quant_type=args.quant_type,
-            bnb_n_bits=args.quant_bits,
+            quant_type=args.quant_type,
+            quant_bits=args.quant_bits,
             lora_rank=args.lora_rank,
             lora_alpha=args.lora_alpha,
             lora_target_modules=args.lora_target_modules,
+            lora_modules_to_save=args.lora_modules_to_save,
             device_map=args.device_map,
             num_workers=args.num_workers,
             overwrite_output_dir=args.overwrite_output_dir,
             overwrite_dataset_cache=args.overwrite_dataset_cache,
             loqer_scaling_mode=args.loqer_scaling_mode,
             peek_post_init_metrics=args.peek_post_init_metrics,
+            mxint_block_size=args.mxint_block_size,
         )
     elif args.model_type == "cls":
         if args.lora_target_modules is None:
