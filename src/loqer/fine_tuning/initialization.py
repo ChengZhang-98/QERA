@@ -28,7 +28,9 @@ def _low_rank_decomposition_loftq(weight, reduced_rank=32):
 
 
 @torch.no_grad()
-def init_lora_loftq_4bit(qweight, weight: torch.Tensor, num_iters: int, reduced_rank: int, compute_device):
+def init_lora_loftq_4bit(
+    qweight: bnb.nn.Params4bit, weight: torch.Tensor, num_iters: int, reduced_rank: int, compute_device
+):
     """
     Update quantized weight and LoRA weights in a BitsAndBytes 4-bit Lora layer
     """
@@ -50,6 +52,7 @@ def init_lora_loftq_4bit(qweight, weight: torch.Tensor, num_iters: int, reduced_
             quant_state=None,
             bnb_quantized=False,
             blocksize=quant_state.blocksize,
+            quant_storage=qweight.quant_storage,
         ).to(compute_device)
         dequantized_weight = bnb.functional.dequantize_4bit(qweight.data, quant_state)
 

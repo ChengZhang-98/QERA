@@ -147,6 +147,7 @@ def adapt_and_save_clm_model(
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
             # bnb_4bit_quant_storage=torch.bfloat16,
+            bnb_4bit_quant_storage=torch.uint8,
         )
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     else:
@@ -385,7 +386,7 @@ def adapt_and_save_cls_model(
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
-            # bnb_4bit_quant_storage=torch.bfloat16,
+            bnb_4bit_quant_storage=torch.bfloat16,
             llm_int8_skip_modules=lora_modules_to_save,  # https://github.com/huggingface/peft/issues/1720
         )
         model = transformers.AutoModelForSequenceClassification.from_pretrained(
