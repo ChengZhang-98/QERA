@@ -106,6 +106,7 @@ def replace_lora_weights_loftq_4bit(
         ori_weight = safetensor_loader.get_tensor(name + ".weight")
 
         reduced_rank = module.r[adapter_name]
+        lora_layer_scaling = module.scaling[adapter_name]
 
         lora_A, lora_B, new_qweight, error_f_norm = init_lora_loftq_4bit(
             qweight=module.weight,
@@ -117,7 +118,7 @@ def replace_lora_weights_loftq_4bit(
         error_dict[name] = error_f_norm
 
         module.lora_A[adapter_name].weight.data = lora_A
-        module.lora_B[adapter_name].weight.data = lora_B
+        module.lora_B[adapter_name].weight.data = lora_B / lora_layer_scaling
         module.weight.data = new_qweight
 
     return error_dict
@@ -204,13 +205,16 @@ def replace_lora_weights_loftq_kbit(
     named_modules = {name: module for name, module in peft_model.named_modules()}
     error_dict = {}
 
-    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (Emulated 2-bit LoftQ)"):
+    for name, module in tqdm.tqdm(
+        named_modules.items(), desc=f"Replacing LoRA adapters (Emulated {num_bits}-bit LoftQ)"
+    ):
         if not isinstance(module, LoraLinear):
             continue
         if not name.startswith(prefix):
             raise TypeError(f"Not peft model")
 
         reduced_rank = module.r[adapter_name]
+        lora_layer_scaling = module.scaling[adapter_name]
 
         if quant_type in ["normal", "uniform"]:
             lora_A, lora_B, new_weight, error_f_norm = init_lora_loftq_2bit_bnb(
@@ -232,7 +236,7 @@ def replace_lora_weights_loftq_kbit(
         error_dict[name] = error_f_norm
 
         module.lora_A[adapter_name].weight.data = lora_A
-        module.lora_B[adapter_name].weight.data = lora_B
+        module.lora_B[adapter_name].weight.data = lora_B / lora_layer_scaling
         module.weight.data = new_weight
 
     return error_dict
@@ -250,9 +254,7 @@ def _low_rank_decomposition_loqer(x: torch.Tensor, reduced_rank: int):
     L = U @ torch.diag(S)[:, :reduced_rank]
     R = Vh[:reduced_rank, :]
 
-    error_f_norm = S[reduced_rank:].pow(2).sum().sqrt().cpu().item()
-
-    return L, R, error_f_norm
+    return L, R
 
 
 @torch.no_grad()
@@ -296,9 +298,11 @@ def init_lora_loqer_4bit(qweight, weight: torch.Tensor, scale: torch.Tensor, red
     residual_scaled = residual @ scale
 
     torch.cuda.empty_cache()
-    L, R_, error_f_norm = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
+    L, R_ = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
 
     R = torch.linalg.solve(scale, R_.T).T
+
+    error_f_norm = torch.linalg.norm(residual - L @ R_, ord="fro").cpu().item()
 
     lora_A, lora_B = R, L
     return lora_A, lora_B, qweight, error_f_norm
@@ -329,6 +333,7 @@ def replace_lora_weights_loqer_4bit(
         ori_weight = safetensor_loader.get_tensor(name + ".weight")
         scale = scale_dict[name]
         reduced_rank = module.r[adapter_name]
+        lora_layer_scaling = module.scaling[adapter_name]
 
         lora_A, lora_B, qweight, error_f_norm = init_lora_loqer_4bit(
             qweight=module.weight,
@@ -340,7 +345,7 @@ def replace_lora_weights_loqer_4bit(
         error_dict[name] = [error_f_norm]
 
         module.lora_A[adapter_name].weight.data = lora_A
-        module.lora_B[adapter_name].weight.data = lora_B
+        module.lora_B[adapter_name].weight.data = lora_B / lora_layer_scaling
         module.weight.data = qweight
 
     return error_dict
@@ -372,8 +377,10 @@ def init_lora_loqer_2bit_bnb(
     residual_scaled = residual @ scale
 
     torch.cuda.empty_cache()
-    L, R_, error_f_norm = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
+    L, R_ = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
     R = torch.linalg.solve(scale, R_.T).T
+
+    error_f_norm = torch.linalg.norm(residual - L @ R, ord="fro").cpu().item()
 
     lora_A, lora_B = R, L
     return lora_A, lora_B, dequantized_weight.to(orig_weight_dtype), error_f_norm
@@ -400,9 +407,10 @@ def init_lora_loqer_kbit_mxint(
     residual_scaled = residual @ scale
 
     torch.cuda.empty_cache()
-    L, R_, error_f_norm = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
-    R = torch.linalg.solve(scale, R_.T).T
+    L, R_ = _low_rank_decomposition_loqer(residual_scaled, reduced_rank)
+    R = torch.linalg.solve(scale, R_.T).T  # scale is symmetric, thus (S^-1).T = S^(-1)
 
+    error_f_norm = torch.linalg.norm(residual - L @ R, ord="fro").cpu().item()
     lora_A, lora_B = R, L
     return lora_A, lora_B, quantized_weight.to(orig_weight_dtype), error_f_norm
 
@@ -422,7 +430,9 @@ def replace_lora_weight_loqer_kbit(
     named_modules = {name: module for name, module in peft_model.named_modules()}
     error_dict = {}
 
-    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (Emulated 2-bit LoQER+)"):
+    for name, module in tqdm.tqdm(
+        named_modules.items(), desc=f"Replacing LoRA adapters (Emulated {num_bits}-bit LoQER+)"
+    ):
         if not isinstance(module, LoraLinear):
             continue
         if not name.startswith(prefix):
@@ -431,6 +441,7 @@ def replace_lora_weight_loqer_kbit(
         reduced_rank = module.r[adapter_name]
         name = name[len(prefix) :]
         scale = scale_dict[name]
+        lora_layer_scaling = module.scaling[adapter_name]
 
         if quant_type in ["nf", "fp"]:
             lora_A, lora_B, new_weight, error_f_norm = init_lora_loqer_2bit_bnb(
@@ -452,7 +463,7 @@ def replace_lora_weight_loqer_kbit(
         error_dict[name] = [error_f_norm]
 
         module.lora_A[adapter_name].weight.data = lora_A
-        module.lora_B[adapter_name].weight.data = lora_B
+        module.lora_B[adapter_name].weight.data = lora_B / lora_layer_scaling
         module.weight.data = new_weight
 
     return error_dict
@@ -503,7 +514,9 @@ def replace_lora_weight_qlora_kbit(peft_model, quant_type, num_bits: int, comput
     named_modules = {name: module for name, module in peft_model.named_modules()}
     error_dict = {}
 
-    for name, module in tqdm.tqdm(named_modules.items(), desc="Replacing LoRA adapters (Emulatd 2-bit qLoRA)"):
+    for name, module in tqdm.tqdm(
+        named_modules.items(), desc=f"Replacing LoRA adapters (Emulated {num_bits}-bit qLoRA)"
+    ):
         if not isinstance(module, LoraLinear):
             continue
         if not name.startswith(prefix):

@@ -9,6 +9,7 @@ from .wikitext2_peft import get_raw_data_module_wikitext2_peft, preprocess_data_
 from .slim_pajama_6b_peft import get_raw_data_module_slimpajama_6b_peft, preprocess_data_module_slimpajama_6b_peft
 from .glue_peft import get_raw_data_module_glue_peft, preprocess_data_module_glue_peft
 from .glue_peft import TASK_TO_KEYS as GLUE_TASK_TO_KEYS
+from .wikitext2_mlm import get_raw_data_module_wikitext2_mlm, preprocess_data_module_wikitext2_mlm
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,8 @@ def get_raw_data_module(name: str) -> hf_datasets.DatasetDict:
         return get_raw_data_module_wikitext2_peft()
     elif name == "slim_pajama_6b_peft":
         return get_raw_data_module_slimpajama_6b_peft()
+    elif name == "wikitext2_mlm":
+        return get_raw_data_module_wikitext2_mlm()
     elif name in glue_tasks:
         # "glue,subtask_peft"
         return get_raw_data_module_glue_peft(name.split(",")[1].removesuffix("_peft"))
@@ -132,6 +135,14 @@ def preprocess_data_module_for_peft(
             model_config=model_config,
             pad_to_max_length=pad_to_max_length,
             max_length=max_length,
+            overwrite_cache=overwrite_cache,
+        )
+    elif name == "wikitext2_mlm":
+        return preprocess_data_module_wikitext2_mlm(
+            raw_dataset_dict,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            num_proc=num_proc,
             overwrite_cache=overwrite_cache,
         )
     else:

@@ -44,14 +44,14 @@ def adapt_and_save_clm_model(
     quant_bits: int,
     lora_rank: int,
     lora_alpha: float,
-    lora_target_modules: list[str],
+    lora_target_modules: list[str] | None,
     device_map: str,
     num_workers: int,
     overwrite_output_dir: bool,
     overwrite_dataset_cache: bool,
     loqer_scaling_mode: str,
     peek_post_init_metrics: bool,
-    lora_modules_to_save: list[str],
+    lora_modules_to_save: list[str] | None,  # lm_head will not be quantized
     mxint_block_size: int,
 ):
     """
@@ -66,6 +66,12 @@ def adapt_and_save_clm_model(
     assert loqer_scaling_mode in ["diag", "rxx"]
     if quant_type in ["nf", "fp"]:
         assert quant_bits in [2, 4]
+
+    if lora_target_modules is None:
+        lora_target_modules = "all-linear"
+        logger.warning(f" ⚠️ Defaulting lora_target_modules to {lora_target_modules}")
+    if lora_modules_to_save is None:
+        logger.warning(f" ⚠️ Defaulting lora_modules_to_save to 'None'")
 
     output_dir = Path(output_dir)
     if output_dir.exists():
@@ -141,7 +147,6 @@ def adapt_and_save_clm_model(
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
             # bnb_4bit_quant_storage=torch.bfloat16,
-            llm_int8_skip_modules=lora_modules_to_save,
         )
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     else:
@@ -252,6 +257,7 @@ def adapt_and_save_cls_model(
     adapter_init: str,
     output_dir: str,
     loqer_calibration_set: str,
+    loqer_calibration_set_type: str,
     loqer_num_calibration_samples: int,
     loqer_calibration_batch_size: int,
     loqer_max_seq_length: int,
@@ -260,14 +266,14 @@ def adapt_and_save_cls_model(
     quant_bits: int,
     lora_rank: int,
     lora_alpha: float,
-    lora_target_modules: list[str],
+    lora_target_modules: list[str] | None,
     device_map: str,
     num_workers: int,
     overwrite_output_dir: bool,
     overwrite_dataset_cache: bool,
     loqer_scaling_mode: str,
     peek_post_init_metrics: bool,
-    lora_modules_to_save: list[str],
+    lora_modules_to_save: list[str] | None,
     mxint_block_size: int,
 ):
     assert adapter_init in ["loftq", "loqer", "qlora", "lora"]
@@ -275,7 +281,27 @@ def adapt_and_save_cls_model(
     assert quant_type in ["nf", "fp", "mxint"]
     if quant_type in ["nf", "fp"]:
         assert quant_bits in [2, 4]
+    assert loqer_calibration_set_type in ["downstream", "pretrain"]
     PAD_TO_MAX_LENGTH = True
+    MLM_PROBABILITY = 0.15
+
+    if lora_target_modules is None:
+        if "deberta" in model_name_or_path.lower():
+            lora_target_modules = ["key_proj", "query_proj", "value_proj", "dense"]
+        elif "roberta" in model_name_or_path.lower():
+            lora_target_modules = r"roberta\.encoder\.layer\.\d+\.(attention\.self\.(query|key|value)|(attention\.output\.dense)|(intermediate\.dense)|(output\.dense))"
+        else:
+            raise ValueError(f"Cannot determine default modules to save for {model_name_or_path}")
+
+        logger.info(f"🔍 Using default lora_target_modules: {lora_target_modules}")
+
+    if lora_modules_to_save is None:
+        if "deberta" in model_name_or_path.lower():
+            lora_modules_to_save = ["pooler.dense", "classifier"]
+        elif "roberta" in model_name_or_path.lower():
+            lora_modules_to_save = ["classifier"]
+        else:
+            raise ValueError(f"Cannot determine default modules to save for {model_name_or_path}")
 
     output_dir = Path(output_dir)
     if output_dir.exists():
@@ -305,7 +331,12 @@ def adapt_and_save_cls_model(
             device_map = create_device_map(model, device_map)
             model = dispatch_model(model, device_map)
 
-        data_collator = transformers.default_data_collator
+        if loqer_calibration_set_type == "downstream":
+            data_collator = transformers.default_data_collator
+        else:
+            data_collator = transformers.DataCollatorForLanguageModeling(
+                tokenizer=tokenizer, mlm=True, mlm_probability=MLM_PROBABILITY
+            )
         if adapter_init == "loqer":
             layers_to_register_and_share = find_layers_to_register_scale_hook(model)
             profiler_factory = register_scale_hooks(
@@ -332,7 +363,7 @@ def adapt_and_save_cls_model(
         input_device = next(model.parameters()).device
         for i, batch in enumerate(calibration_dataloader):
             with torch.no_grad():
-                batch = {k: v.to(input_device) for k, v in batch.items()}
+                batch = {k: v.to(input_device) for k, v in batch.items() if k != "labels"}
                 outputs = model(**batch, output_hidden_states=True)
             last_hidden_states = outputs.hidden_states[-1]
             output_ref.append(last_hidden_states.cpu())
@@ -439,7 +470,7 @@ def adapt_and_save_cls_model(
         post_init_outputs = []
         input_device = next(peft_model.parameters()).device
         for i, batch in enumerate(calibration_dataloader):
-            batch = {k: v.to(input_device) for k, v in batch.items()}
+            batch = {k: v.to(input_device) for k, v in batch.items() if k != "labels"}
             with torch.no_grad():
                 outputs = peft_model(**batch, output_hidden_states=True)
             last_hidden_states = outputs.hidden_states[-1]
@@ -478,6 +509,13 @@ def adapt_and_save_pipeline():
     parser.add_argument("output_dir", type=str)
     parser.add_argument(
         "--loqer-calibration-set", type=str, default=None, help="Default: wikitext2_peft for clm, required for cls"
+    )
+    parser.add_argument(
+        "--loqer-calibration-set-type",
+        type=str,
+        default="downstream",
+        help="Default: downstream, required for cls",
+        choices=["downstream", "pretrain"],
     )
     parser.add_argument("--loqer-num-calibration-samples", type=int, default=128)
     parser.add_argument("--loqer-calibration-batch-size", type=int, default=2)
@@ -519,11 +557,6 @@ def adapt_and_save_pipeline():
     transformers.set_seed(args.seed)
 
     if args.model_type == "clm":
-        if args.lora_target_modules is None:
-            args.lora_target_modules = "all-linear"
-            logger.warning(f" ⚠️Defaulting lora_target_modules to {args.lora_target_modules}")
-        if args.lora_modules_to_save is None:
-            logger.warning(f" ⚠️Defaulting lora_modules_to_save to 'None'")
         adapt_and_save_clm_model(
             args.model_name_or_path,
             adapter_init=args.adapter_init,
@@ -548,17 +581,12 @@ def adapt_and_save_pipeline():
             mxint_block_size=args.mxint_block_size,
         )
     elif args.model_type == "cls":
-        if args.lora_target_modules is None:
-            args.lora_target_modules = ["key_proj", "query_proj", "value_proj", "dense"]
-            logger.warning(f"⚠️ Using default lora_target_modules: {args.lora_target_modules}")
-        if args.lora_modules_to_save is None:
-            args.lora_modules_to_save = ["pooler.dense", "classifier"]
-            logger.warning(f"⚠️ Using default lora_modules_to_save: {args.lora_modules_to_save}")
         adapt_and_save_cls_model(
             args.model_name_or_path,
             adapter_init=args.adapter_init,
             output_dir=args.output_dir,
             loqer_calibration_set=args.loqer_calibration_set,
+            loqer_calibration_set_type=args.loqer_calibration_set_type,
             loqer_num_calibration_samples=args.loqer_num_calibration_samples,
             loqer_calibration_batch_size=args.loqer_calibration_batch_size,
             loqer_max_seq_length=args.loqer_max_seq_length,

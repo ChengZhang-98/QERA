@@ -2,10 +2,11 @@ import logging
 from copy import deepcopy
 
 from torch import nn
-from transformers.models.deberta_v2.modeling_deberta_v2 import (
-    DebertaV2Layer,
-    DebertaV2Encoder,
-    DebertaV2ForSequenceClassification,
+from transformers.models.roberta.modeling_roberta import (
+    RobertaLayer,
+    RobertaEncoder,
+    RobertaForSequenceClassification,
+    RobertaForMaskedLM,
 )
 
 from ..quantize import get_quantized_layer_cls
@@ -14,11 +15,11 @@ from ..utils import find_matched_pattern, get_layer_name, set_layer_by_name
 logger = logging.getLogger(__name__)
 
 
-def build_loqer_config_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config: dict):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
+def build_loqer_config_roberta(model: RobertaForSequenceClassification, loqer_config: dict):
+    assert isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM))
     parsed_config = {}
 
-    encoder: DebertaV2Encoder = model.deberta.encoder
+    encoder: RobertaEncoder = model.roberta.encoder
 
     for module in encoder.modules():
         if not isinstance(module, nn.Linear):
@@ -34,11 +35,11 @@ def build_loqer_config_deberta_v2(model: DebertaV2ForSequenceClassification, loq
     return parsed_config
 
 
-def quantize_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config: dict):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
-    loqer_config = build_loqer_config_deberta_v2(model, loqer_config)
+def quantize_roberta(model: RobertaForSequenceClassification, loqer_config: dict):
+    assert isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM))
+    loqer_config = build_loqer_config_roberta(model, loqer_config)
 
-    for module in model.deberta.encoder.modules():
+    for module in model.roberta.encoder.modules():
         if not isinstance(module, nn.Linear):
             continue
 
@@ -53,21 +54,21 @@ def quantize_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config:
         new_fc.load_state_dict(module.state_dict())
         set_layer_by_name(model, fc_name, new_fc)
 
-    model._no_split_modules = ["DebertaV2Layer"]
+    model._no_split_modules = ["RobertaLayer"]
 
     return model
 
 
-def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2ForSequenceClassification):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
+def find_layers_to_register_scale_hook_roberta(model: RobertaForSequenceClassification):
+    assert isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM))
     assert model.config._attn_implementation == "eager"
     layers_to_register = []
 
-    decoder_layer: DebertaV2Layer
-    for decoder_layer in model.deberta.encoder.layer:
-        k_name = get_layer_name(model, decoder_layer.attention.self.key_proj)
-        q_name = get_layer_name(model, decoder_layer.attention.self.query_proj)
-        v_name = get_layer_name(model, decoder_layer.attention.self.value_proj)
+    decoder_layer: RobertaLayer
+    for decoder_layer in model.roberta.encoder.layer:
+        k_name = get_layer_name(model, decoder_layer.attention.self.key)
+        q_name = get_layer_name(model, decoder_layer.attention.self.query)
+        v_name = get_layer_name(model, decoder_layer.attention.self.value)
         layers_to_register.append(dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]))
 
         o_name = get_layer_name(model, decoder_layer.attention.output.dense)
@@ -82,10 +83,10 @@ def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2ForSequenceCla
     return layers_to_register
 
 
-def find_layers_to_approximate_deberta_v2(model: DebertaV2ForSequenceClassification):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
+def find_layers_to_approximate_roberta(model: RobertaForSequenceClassification):
+    assert isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM))
     layers_to_approximate = []
-    for layer_name, layer in model.deberta.encoder.layer.named_modules():
+    for layer_name, layer in model.roberta.encoder.layer.named_modules():
         if not isinstance(layer, nn.Linear):
             continue
         layer_name = get_layer_name(model, layer)
