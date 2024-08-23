@@ -125,6 +125,8 @@ def visualize_roberta_logits_error(df):
 
 
 df_4bit = pd.read_pickle("roberta_output_error_4bit.pkl")
+df_4bit = df_4bit.sort_values(by=["adapter_init", "rank"])
+print(df_4bit)
 fig_output_e, ax_output_e = visualize_roberta_logits_error(df_4bit)
 
 # %%
@@ -233,5 +235,7 @@ def visualize_roberta_loftq_output_errors_3bit(df):
 
 
 df_3bit = pd.read_pickle("roberta_output_error_3bit.pkl")
+df_3bit = df_3bit.sort_values(by=["adapter_init", "rank"])
+print(df_3bit)
 fig, ax = visualize_roberta_loftq_output_errors_3bit(df_3bit)
 fig.savefig("roberta_output_error_vs_loftq_iters_3bit.pdf", bbox_inches="tight")
