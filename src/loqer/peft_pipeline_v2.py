@@ -55,23 +55,21 @@ def adapt_and_save_clm_model(
     mxint_block_size: int,
 ):
     """
-    Load a pretrained model, quantized it to 4-bit or 2-bit, initialize the lora adapter specified by `adapter_init`, save the base model and the initialized adapter
-
-    - For 4-bit qLoRA, the bnb config and lora config are saved; adapters should be randomly initialized in the training script
-    - For 2-bit qLoRA, the quantized base model and lora config are saved; adapters should be randomly initialized in the training script
-    - For 2/4-bit LoftQ, both the quantized base model and the adapter are saved
-    - For 2/4-bit Loqer, both the quantized base model and the adapter are saved
+    Apply Lora or qLoRA to a causal language model and save the base model & adapted model to disk.
     """
     assert adapter_init in ["loftq", "loqer", "qlora", "lora"]
     assert loqer_scaling_mode in ["diag", "rxx"]
+    assert quant_type in ["nf", "fp", "mxint"]
     if quant_type in ["nf", "fp"]:
         assert quant_bits in [2, 4]
 
     if lora_target_modules is None:
         lora_target_modules = "all-linear"
-        logger.warning(f" ⚠️ Defaulting lora_target_modules to {lora_target_modules}")
+        logger.warning(
+            f" ⚠️ Defaulting lora_target_modules to {lora_target_modules}, which automatically selects all linear layers except for lm_head"
+        )
     if lora_modules_to_save is None:
-        logger.warning(f" ⚠️ Defaulting lora_modules_to_save to 'None'")
+        logger.warning(f" ⚠️ Defaulting lora_modules_to_save to 'None'. LM head will not be quantized.")
 
     output_dir = Path(output_dir)
     if output_dir.exists():
@@ -127,7 +125,7 @@ def adapt_and_save_clm_model(
             eval_dataloader=calibration_dataloader,
             num_samples=loqer_num_calibration_samples,
             progress_bar=True,
-            description="Calibrating scales for LoQER+",
+            description="Pretrained model profiling",
         )
         logger.info(f"Profiling outputs:\n{pformat(profile_outputs, sort_dicts=False)}")
         if adapter_init == "loqer":
@@ -146,8 +144,8 @@ def adapt_and_save_clm_model(
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
-            # bnb_4bit_quant_storage=torch.bfloat16,
-            bnb_4bit_quant_storage=torch.uint8,
+            bnb_4bit_quant_storage=torch.bfloat16,  # !: uint8 will not work with qLoRA + FSDP
+            # bnb_4bit_quant_storage=torch.uint8,
         )
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     else:
@@ -180,7 +178,7 @@ def adapt_and_save_clm_model(
     error_dict = None
     elapsed = None
     if adapter_init == "loftq":
-        if quant_bits == 4:
+        if quant_bits == 4 and quant_type in ["nf", "fp"]:
             start = time.time()
             error_dict = replace_lora_weights_loftq_4bit(peft_model, num_iters=loftq_num_iters)
             elapsed = time.time() - start
@@ -389,11 +387,14 @@ def adapt_and_save_cls_model(
             bnb_4bit_quant_storage=torch.bfloat16,
             llm_int8_skip_modules=lora_modules_to_save,  # https://github.com/huggingface/peft/issues/1720
         )
+        # this num_labels is just a placeholder, it will be overwritten by the actual number of labels in the dataset
+        # !: don't set num_labels to 2, or the floating-point classifier will be mis-recognized as bnb weight by PeftModel.from_pretrained(..., ignore_mismatched_sizes=True)
+        # !: then ignore_mismatched_sizes=True will not work
         model = transformers.AutoModelForSequenceClassification.from_pretrained(
-            model_name_or_path, quantization_config=bnb_config
+            model_name_or_path, quantization_config=bnb_config, num_labels=3
         )
     else:
-        model = transformers.AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
+        model = transformers.AutoModelForSequenceClassification.from_pretrained(model_name_or_path, num_labels=3)
         if "cuda" in device_map:
             model.to(device_map)
         else:
