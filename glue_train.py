@@ -250,27 +250,6 @@ def parse_args():
         - kbit: base_model_dir, lora_adapter_dir [load emulated base model, load adapter]
     """
 
-    # fmt: off
-    # if args.lora_init_method == "full-finetune":
-    #     pass
-    # elif args.lora_init_method == "lora":
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    # elif args.lora_init_method == "qlora,4":
-    #     assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    # elif args.lora_init_method == "loftq,4":
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    # elif args.lora_init_method == "loqer,4":
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    # elif args.lora_init_method in ["qlora,2", "loftq,2", "loqer,2"]:
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    # else:
-    #     raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
-    # fmt: on
-
     return args
 
 
@@ -404,74 +383,12 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
     config.pad_token_id = tokenizer.pad_token_id
 
-    # model_kwargs = {
-    #     "from_tf": bool(".ckpt" in args.model_name_or_path),
-    #     "config": config,
-    #     "ignore_mismatched_sizes": args.ignore_mismatched_sizes,
-    #     "trust_remote_code": args.trust_remote_code,
-    # }
-    # if args.lora_init_method == "full-finetune":
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-    # elif args.lora_init_method == "lora":
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-    #     with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-    #         lora_config_dict = json.load(f)
-    #     lora_config_dict["inference_mode"] = False
-    #     lora_config = LoraConfig(**lora_config_dict)
-    #     model = get_peft_model(model, lora_config)
-    # elif args.lora_init_method == "qlora,4":
-    #     with open(args.bnb_config_yaml, "r") as f:
-    #         bnb_config_dict = yaml.safe_load(f)
-    #     bnb_config = BitsAndBytesConfig(**bnb_config_dict)
-    #     model_kwargs["quantization_config"] = bnb_config
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-    #     model = prepare_model_for_kbit_training(
-    #         model,
-    #         use_gradient_checkpointing=args.use_gradient_checkpointing,
-    #         gradient_checkpointing_kwargs={"use_reentrant": True},
-    #     )
-    #     with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-    #         lora_config_dict = json.load(f)
-    #     lora_config_dict["inference_mode"] = False
-    #     lora_config = LoraConfig(**lora_config_dict)
-    #     model = get_peft_model(model, lora_config)
-    # elif args.lora_init_method == "loftq,4":
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
-    #     model = prepare_model_for_kbit_training(
-    #         model,
-    #         use_gradient_checkpointing=args.use_gradient_checkpointing,
-    #         gradient_checkpointing_kwargs={"use_reentrant": True},
-    #     )
-    #     model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    # elif args.lora_init_method == "loqer,4":
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
-    #     model = prepare_model_for_kbit_training(
-    #         model,
-    #         use_gradient_checkpointing=args.use_gradient_checkpointing,
-    #         gradient_checkpointing_kwargs={"use_reentrant": True},
-    #     )
-    #     model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    # elif args.lora_init_method == "qlora,2":
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-    #     with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-    #         lora_config_dict = json.load(f)
-    #     lora_config_dict["inference_mode"] = False
-    #     lora_config = LoraConfig(**lora_config_dict)
-    #     model = get_peft_model(model, lora_config)
-    # elif args.lora_init_method in ["loftq,2", "loqer,2"]:
-    #     model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path, **model_kwargs)
-    #     model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    # else:
-    #     raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
-
-    # if args.lora_init_method != "full-finetune":
-    #     trainable_params, all_param = model.get_nb_trainable_parameters()
-    #     logger.info(
-    #         f"🔍 trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}"
-    #     )
-
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.model_name_or_path, trust_remote_code=args.trust_remote_code
+        args.model_name_or_path,
+        # config=config,
+        trust_remote_code=args.trust_remote_code,
+        ignore_mismatched_sizes=True,
+        num_labels=num_labels,
     )
 
     _model_loaded_from_local = False
@@ -490,7 +407,7 @@ def main():
     _adapter_is_applied = False
     if args.lora_adapter_dir is not None:
         assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
+        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True, ignore_mismatched_sizes=True)
         _adapter_is_applied = True
 
     logger.info(f"🔍 model loaded from local: {_model_loaded_from_local}")
