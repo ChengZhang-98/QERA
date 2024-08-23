@@ -6,6 +6,7 @@ from transformers.models.deberta_v2.modeling_deberta_v2 import (
     DebertaV2Layer,
     DebertaV2Encoder,
     DebertaV2ForSequenceClassification,
+    DebertaV2ForMaskedLM,
 )
 
 from ..quantize import get_quantized_layer_cls
@@ -35,7 +36,7 @@ def build_loqer_config_deberta_v2(model: DebertaV2ForSequenceClassification, loq
 
 
 def quantize_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config: dict):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
+    assert isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM))
     loqer_config = build_loqer_config_deberta_v2(model, loqer_config)
 
     for module in model.deberta.encoder.modules():
@@ -59,7 +60,7 @@ def quantize_deberta_v2(model: DebertaV2ForSequenceClassification, loqer_config:
 
 
 def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2ForSequenceClassification):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
+    assert isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM))
     assert model.config._attn_implementation == "eager"
     layers_to_register = []
 
@@ -83,7 +84,7 @@ def find_layers_to_register_scale_hook_deberta_v2(model: DebertaV2ForSequenceCla
 
 
 def find_layers_to_approximate_deberta_v2(model: DebertaV2ForSequenceClassification):
-    assert isinstance(model, DebertaV2ForSequenceClassification)
+    assert isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM))
     layers_to_approximate = []
     for layer_name, layer in model.deberta.encoder.layer.named_modules():
         if not isinstance(layer, nn.Linear):
