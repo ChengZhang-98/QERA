@@ -67,7 +67,7 @@ def visualize_roberta_logits_error(df):
         "x--",
         markersize=markersize,
         color=get_cz_color("cz_grey"),
-        label="4-bit QLoRA",
+        label="QLoRA",
     )
 
     # 4-bit, loftq (1-iter)
