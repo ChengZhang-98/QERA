@@ -56,6 +56,7 @@ def visualize_roberta_logits_error(df):
     plt.rc("ytick", labelsize=FONT_SIZE_S)  # fontsize of the tick labels
     plt.rc("legend", fontsize=FONT_SIZE_S)  # legend fontsize
     plt.rc("figure", titlesize=FONT_SIZE_L)  # fontsize of the figure title
+    plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
     fig, ax = plt.subplots(figsize=figsize)
 
     # output_error-vs-rank
@@ -119,7 +120,7 @@ def visualize_roberta_logits_error(df):
     ax.set_xticks(np.arange(len(df.loc[mask, "rank"])))
     ax.set_xticklabels(df.loc[mask, "rank"].unique())
     # place the legend outside the plot, right side
-    ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
+    ax.legend(loc="upper left", bbox_to_anchor=(1, 1), title="4-bit Weight")
     plt.show()
     return fig, ax
 
@@ -153,6 +154,7 @@ def visualize_roberta_loftq_output_errors_3bit(df):
     plt.rc("ytick", labelsize=FONT_SIZE_S)  # fontsize of the tick labels
     plt.rc("legend", fontsize=FONT_SIZE_S)  # legend fontsize
     plt.rc("figure", titlesize=FONT_SIZE_L)  # fontsize of the figure title
+    plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
     fig, ax = plt.subplots(figsize=figsize)
 
     mask_loftq_r4 = (
@@ -226,7 +228,7 @@ def visualize_roberta_loftq_output_errors_3bit(df):
     ax.set_xticks(num_iters)
 
     # place the legend outside the plot, right side
-    ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
+    ax.legend(loc="upper left", bbox_to_anchor=(1, 1), title="3-bit Weight")
     # ax.legend()
 
     plt.show()
