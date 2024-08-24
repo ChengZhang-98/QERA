@@ -97,7 +97,8 @@ def adapt_and_save_clm_model(
             device_map = create_device_map(model, device_map)
             model = dispatch_model(model, device_map)
 
-        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        # data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        data_collator = transformers.default_data_collator
         if adapter_init == "loqer":
             layers_to_register_and_share = find_layers_to_register_scale_hook(model)
             profiler_factory = register_scale_hooks(
@@ -274,6 +275,7 @@ def adapt_and_save_cls_model(
     peek_post_init_metrics: bool,
     lora_modules_to_save: list[str] | None,
     mxint_block_size: int,
+    num_labels: int,
 ):
     assert adapter_init in ["loftq", "loqer", "qlora", "lora"]
     assert loqer_scaling_mode in ["diag", "rxx"]
@@ -391,10 +393,12 @@ def adapt_and_save_cls_model(
         # !: don't set num_labels to 2, or the floating-point classifier will be mis-recognized as bnb weight by PeftModel.from_pretrained(..., ignore_mismatched_sizes=True)
         # !: then ignore_mismatched_sizes=True will not work
         model = transformers.AutoModelForSequenceClassification.from_pretrained(
-            model_name_or_path, quantization_config=bnb_config, num_labels=3
+            model_name_or_path, quantization_config=bnb_config, num_labels=num_labels
         )
     else:
-        model = transformers.AutoModelForSequenceClassification.from_pretrained(model_name_or_path, num_labels=3)
+        model = transformers.AutoModelForSequenceClassification.from_pretrained(
+            model_name_or_path, num_labels=num_labels
+        )
         if "cuda" in device_map:
             model.to(device_map)
         else:
@@ -554,6 +558,7 @@ def adapt_and_save_pipeline():
     parser.add_argument("--overwrite-dataset-cache", action="store_true")
     parser.add_argument("--peek-post-init-metrics", action="store_true", default=False)
     parser.add_argument("--mxint-block-size", type=int, default=32)
+    parser.add_argument("--num-labels", type=int, default=2)
     args = parser.parse_args()
     logger.info(f"Arguments\n{pformat(vars(args), sort_dicts=True)}")
     transformers.set_seed(args.seed)
@@ -606,6 +611,7 @@ def adapt_and_save_pipeline():
             loqer_scaling_mode=args.loqer_scaling_mode,
             peek_post_init_metrics=args.peek_post_init_metrics,
             mxint_block_size=args.mxint_block_size,
+            num_labels=args.num_labels,
         )
 
     args_dict = vars(args)
