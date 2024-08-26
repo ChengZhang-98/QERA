@@ -236,18 +236,12 @@ def parse_args():
         ),
     )
     # *: custom arguments for peft
-    parser.add_argument(
-        "--lora_init_method",
-        type=str,
-        required=True,
-        choices=["full-finetune", "lora", "qlora,2", "loftq,2", "loqer,2", "qlora,4", "loftq,4", "loqer,4"],
-    )
-    parser.add_argument("--bnb_config_yaml", type=str, default=None)  # this is required by loqer, qlora, and loftq
     parser.add_argument("--lora_adapter_dir", type=str, default=None)
     parser.add_argument("--run_name", type=str, default=None)
     parser.add_argument("--use_gradient_checkpointing", action="store_true", default=False)
+    parser.add_argument("--wandb-tags", type=str, nargs="+", default=None)
+    parser.add_argument
     args = parser.parse_args()
-    # check quantized adapter args
 
     # Sanity checks
     if args.dataset_name is None and args.train_file is None and args.validation_file is None:
@@ -266,38 +260,42 @@ def parse_args():
         if args.output_dir is None:
             raise ValueError("Need an `output_dir` to create a repo when `--push_to_hub` is passed.")
 
+    # *: check custom args
+    if args.lora_adapter_dir is not None and args.lora_adapter_dir == "NA":
+        args.lora_adapter_dir = None
     return args
 
 
 def main():
     args = parse_args()
-    # fmt: off
-    if args.lora_init_method == "full-finetune":
-        lora_init_method = "full-finetune"
-    elif args.lora_init_method == "lora":
-        lora_init_method = "lora"
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    elif args.lora_init_method == "qlora,4":
-        lora_init_method = "qlora,4"
-        assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        # assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    elif args.lora_init_method == "loftq,4":
-        lora_init_method = "loftq,4"
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    elif args.lora_init_method == "loqer,4":
-        lora_init_method = "loqer,4"
-        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    else:
-        raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
-    # fmt: on
+    # # fmt: off
+    # if args.lora_init_method == "full-finetune":
+    #     lora_init_method = "full-finetune"
+    # elif args.lora_init_method == "lora":
+    #     lora_init_method = "lora"
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    # elif args.lora_init_method == "qlora,4":
+    #     lora_init_method = "qlora,4"
+    #     assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    #     # assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    # elif args.lora_init_method == "loftq,4":
+    #     lora_init_method = "loftq,4"
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    # elif args.lora_init_method == "loqer,4":
+    #     lora_init_method = "loqer,4"
+    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
+    # else:
+    #     raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
+    # # fmt: on
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
-    accelerator_log_kwargs = {}
+    mixed_precision = "bf16"
+    accelerator_log_kwargs = {"mixed_precision": mixed_precision}
 
     if args.with_tracking:
         accelerator_log_kwargs["log_with"] = args.report_to
@@ -435,63 +433,39 @@ def main():
 
     # *: create bnb model or un-quantized model
     # *: hard coded bfloat16
-    model_kwargs = dict(
-        pretrained_model_name_or_path=args.model_name_or_path,
-        from_tf=bool(".ckpt" in args.model_name_or_path),
-        config=config,
-        trust_remote_code=args.trust_remote_code,
-        torch_dtype="auto",
-        # low_cpu_mem_usage=model_args.low_cpu_mem_usage,
-    )
-    if lora_init_method == "full-finetune":
-        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
-    elif lora_init_method == "lora":
-        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
-        with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-            lora_config_dict = json.load(f)
-        lora_config_dict["inference_mode"] = False
-        lora_config = LoraConfig(**lora_config_dict)
-        model = get_peft_model(model, lora_config)
-    elif lora_init_method == "qlora,4":
-        with open(args.bnb_config_yaml, "r") as f:
-            bnb_config_dict = yaml.safe_load(f)
-        bnb_config = BitsAndBytesConfig(**bnb_config_dict)
-        model_kwargs["quantization_config"] = bnb_config
-        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.use_gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": True},
-        )
-        with open(Path(args.lora_adapter_dir).joinpath("adapter_config.json"), "r") as f:
-            lora_config_dict = json.load(f)
-        lora_config_dict["inference_mode"] = False
-        lora_config = LoraConfig(**lora_config_dict)
-        model = get_peft_model(model, lora_config)
-    elif lora_init_method == "loftq,4":
-        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.use_gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": True},
-        )
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    elif lora_init_method == "loqer,4":
-        model = AutoModelForCausalLM.from_pretrained(**model_kwargs)
-        model = prepare_model_for_kbit_training(
-            model,
-            use_gradient_checkpointing=args.use_gradient_checkpointing,
-            gradient_checkpointing_kwargs={"use_reentrant": True},
-        )
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
-    else:
-        raise ValueError(f"Invalid lora_init_method: {lora_init_method}")
-    model.train()
+    model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, trust_remote_code=args.trust_remote_code)
 
-    if lora_init_method != "full-finetune":
+    _model_loaded_from_local = False
+    if Path(args.model_name_or_path).exists():
+        _model_loaded_from_local = True
+
+    _model_is_bnb_quantized = False
+    if hasattr(model, "is_quantized") and model.is_quantized:
+        _model_is_bnb_quantized = True
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.use_gradient_checkpointing,
+            gradient_checkpointing_kwargs={"use_reentrant": True},
+        )
+
+    _adapter_is_applied = False
+    if args.lora_adapter_dir is not None:
+        assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
+        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True, ignore_mismatched_sizes=True)
+        _adapter_is_applied = True
+
+    logger.info(f"🔍 model loaded from local: {_model_loaded_from_local}")
+    logger.info(f"🔍 model is bnb quantized: {_model_is_bnb_quantized} (emulated quantization is possible if False)")
+    logger.info(f"🔍 adapter is applied: {_adapter_is_applied}")
+
+    if _adapter_is_applied:
         trainable_params, all_param = model.get_nb_trainable_parameters()
         logger.info(
             f"🔍 trainable params: {trainable_params:,d} || all params: {all_param:,d} || trainable%: {100 * trainable_params / all_param:.4f}"
+        )
+    else:
+        logger.info(
+            f"🔍 Full-finetune: all params: {model.num_parameters()}, trainable: {model.num_parameters(only_trainable=True)}"
         )
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
@@ -663,10 +637,12 @@ def main():
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
         experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
-        tracker_init_kwargs = {}
+        tracker_init_kwargs = {"wandb": {}}
         if args.run_name is not None:
-            tracker_init_kwargs = {"wandb": {"name": args.run_name}}
-        accelerator.init_trackers("clm_no_trainer", experiment_config, tracker_init_kwargs)
+            tracker_init_kwargs["wandb"]["name"] = args.run_name
+        if args.wandb_tags is not None:
+            tracker_init_kwargs["wandb"]["tags"] = args.wandb_tags
+        accelerator.init_trackers("train_clm", experiment_config, tracker_init_kwargs)
 
     # Train!
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps

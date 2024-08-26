@@ -199,11 +199,11 @@ def parse_args():
             "Only applicable when `--with_tracking` is passed."
         ),
     )
-    parser.add_argument(
-        "--ignore_mismatched_sizes",
-        action="store_true",
-        help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
-    )
+    # parser.add_argument(
+    #     "--ignore_mismatched_sizes",
+    #     action="store_true",
+    #     help="Whether or not to enable to load a pretrained model whose head dimensions are different.",
+    # )
 
     # *: custom arguments
     # parser.add_argument(
@@ -387,7 +387,7 @@ def main():
         args.model_name_or_path,
         # config=config,
         trust_remote_code=args.trust_remote_code,
-        ignore_mismatched_sizes=True,
+        ignore_mismatched_sizes=False,
         num_labels=num_labels,
     )
 

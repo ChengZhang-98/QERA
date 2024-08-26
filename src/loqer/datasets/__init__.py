@@ -25,7 +25,13 @@ def get_raw_data_module(name: str) -> hf_datasets.DatasetDict:
     elif name == "wikitext2_peft":
         return get_raw_data_module_wikitext2_peft()
     elif name == "slim_pajama_6b_peft":
-        return get_raw_data_module_slimpajama_6b_peft()
+        return get_raw_data_module_slimpajama_6b_peft("DKYoon/SlimPajama-6B")
+    elif name == "slim_pajama_1b_peft":
+        return get_raw_data_module_slimpajama_6b_peft("iankur/SlimPajama-1B")
+    elif name == "slim_pajama_600m_peft":
+        return get_raw_data_module_slimpajama_6b_peft("iankur/SlimPajama-600M")  # iankur/SlimPajama-600M
+    elif name == "slim_pajama_100m_peft":
+        return get_raw_data_module_slimpajama_6b_peft("iankur/SlimPajama-100M")
     elif name == "wikitext2_mlm":
         return get_raw_data_module_wikitext2_mlm()
     elif name in glue_tasks:
@@ -54,6 +60,7 @@ def preprocess_data_module(
                 max_length=max_length,
                 num_proc=num_proc,
             )
+        # TODO
         case "gsm8k":
             return preprocess_data_module_gsm8k(
                 raw_dataset_dict,
@@ -118,7 +125,7 @@ def preprocess_data_module_for_peft(
             num_proc=num_proc,
             overwrite_cache=overwrite_cache,
         )
-    elif name == "slim_pajama_6b_peft":
+    elif name in ["slim_pajama_6b_peft", "slim_pajama_1b_peft", "slim_pajama_600m_peft", "slim_pajama_100m_peft"]:
         return preprocess_data_module_slimpajama_6b_peft(
             raw_dataset_dict,
             tokenizer=tokenizer,
