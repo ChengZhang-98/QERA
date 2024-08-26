@@ -2,8 +2,8 @@ from itertools import chain
 import datasets as hf_datasets
 
 
-def get_raw_data_module_slimpajama_6b_peft() -> hf_datasets.DatasetDict:
-    dataset_dict = hf_datasets.load_dataset("DKYoon/SlimPajama-6B")
+def get_raw_data_module_slimpajama_6b_peft(dataset_name) -> hf_datasets.DatasetDict:
+    dataset_dict = hf_datasets.load_dataset(dataset_name)
     return dataset_dict
 
 
