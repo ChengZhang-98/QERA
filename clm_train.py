@@ -268,28 +268,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # # fmt: off
-    # if args.lora_init_method == "full-finetune":
-    #     lora_init_method = "full-finetune"
-    # elif args.lora_init_method == "lora":
-    #     lora_init_method = "lora"
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    # elif args.lora_init_method == "qlora,4":
-    #     lora_init_method = "qlora,4"
-    #     assert Path(args.bnb_config_yaml).exists(), f"{args.bnb_config_yaml} does not exist."
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    #     # assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    # elif args.lora_init_method == "loftq,4":
-    #     lora_init_method = "loftq,4"
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    # elif args.lora_init_method == "loqer,4":
-    #     lora_init_method = "loqer,4"
-    #     assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-    #     assert Path(args.model_name_or_path).exists(), f"{args.model_name_or_path} is not a local directory."
-    # else:
-    #     raise ValueError(f"Invalid lora_init_method: {args.lora_init_method}")
-    # # fmt: on
 
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
@@ -432,7 +410,6 @@ def main():
         )
 
     # *: create bnb model or un-quantized model
-    # *: hard coded bfloat16
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, trust_remote_code=args.trust_remote_code)
 
     _model_loaded_from_local = False
@@ -451,7 +428,7 @@ def main():
     _adapter_is_applied = False
     if args.lora_adapter_dir is not None:
         assert Path(args.lora_adapter_dir).exists(), f"{args.lora_adapter_dir} does not exist."
-        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True, ignore_mismatched_sizes=True)
+        model = PeftModel.from_pretrained(model, args.lora_adapter_dir, is_trainable=True)
         _adapter_is_applied = True
 
     logger.info(f"🔍 model loaded from local: {_model_loaded_from_local}")
@@ -692,6 +669,35 @@ def main():
     progress_bar.update(completed_steps)
 
     for epoch in range(starting_epoch, args.num_train_epochs):
+        if epoch == starting_epoch:
+            # validation set
+            model.eval()
+            losses = []
+            for _, batch in enumerate(eval_dataloader):
+                with torch.no_grad():
+                    outputs = model(**batch)
+
+                loss = outputs.loss
+                losses.append(accelerator.gather_for_metrics(loss.repeat(args.per_device_eval_batch_size)))
+
+            losses = torch.cat(losses)
+            try:
+                eval_loss = torch.mean(losses)
+                perplexity = math.exp(eval_loss)
+            except OverflowError:
+                perplexity = float("inf")
+            if args.with_tracking:
+                accelerator.log(
+                    {
+                        "eval_perplexity": perplexity,
+                        "eval_loss": eval_loss,
+                        "step": completed_steps,
+                    },
+                    step=completed_steps,
+                )
+
+            logger.info(f"Before training: eval_perplexity: {perplexity} eval_loss: {eval_loss}")
+
         model.train()
         if args.with_tracking:
             total_loss = 0
