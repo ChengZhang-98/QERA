@@ -70,6 +70,28 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/lang
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
+def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tensor:
+    """
+    If not the scale matrix is not invertible, add turbulence to the scale matrix
+
+    Perform S^-1 @ U using `torch.linalg.solve`, which is more numerically stable.
+    Refer to https://pytorch.org/docs/stable/generated/torch.linalg.inv.html
+    """
+    if scale.ndim == 1:
+        scale = torch.where(scale <= 0, torch.ones_like(scale) * torch.finfo(scale.dtype).eps, scale)
+        return torch.linalg.solve(torch.diag(scale), U)
+    elif scale.ndim == 2:
+        try:
+            return torch.linalg.solve(scale, U)
+        except RuntimeError as e:
+            logger.warning(f"Matrix inversion failed: {e} Adding turbulence to the scale matrix")
+            U_scale, S_scale, V_T_scale = torch.linalg.svd(scale)
+            S_scale = torch.where(S_scale <= 0, torch.ones_like(S_scale) * torch.finfo(S_scale.dtype).eps, S_scale)
+            scale = U_scale @ torch.diag(S_scale) @ V_T_scale
+            return torch.linalg.solve(scale, U)
+    else:
+        raise ValueError("Scale must be either a vector (diagonal) or a matrix")
+
 
 def _low_rank_decomposition(weight, reduced_rank=32):
     """
@@ -89,7 +111,7 @@ def _low_rank_decomposition(weight, reduced_rank=32):
 
 
 @torch.no_grad()
-def _loftq_init_new(qweight, weight, num_bits: int, reduced_rank: int):
+def _loftq_init_new(qweight, weight, num_bits: int, reduced_rank: int, scale=None):
     import bitsandbytes as bnb
 
     if num_bits != 4:
@@ -104,9 +126,47 @@ def _loftq_init_new(qweight, weight, num_bits: int, reduced_rank: int):
     residual = weight - dequantized_weight
     torch.cuda.empty_cache()
     # Decompose the residualidual by SVD
-    output = _low_rank_decomposition(residual, reduced_rank=reduced_rank)
+    if scale is None:
+        output = _low_rank_decomposition(residual, reduced_rank=reduced_rank)
+    else:
+        output = _low_rank_loqer_decomposition(residual, scale=scale, reduced_rank=reduced_rank)
     L, R, reduced_rank = output["L"], output["R"], output["reduced_rank"]
     return R, L
+
+    
+def _low_rank_loqer_decomposition(weight, scale, reduced_rank=32):
+    """
+    :param weight: The matrix to decompose, of shape (H, W) :param reduced_rank: the final rank :return:
+    """
+    matrix_dimension = len(weight.size())
+    if matrix_dimension != 2:
+        raise ValueError(f"Only support 2D matrix, but your input has {matrix_dimension} dimensions.")   
+
+    scale = scale.to(weight.dtype).to(weight.device)
+    if scale.ndim == 1:
+        assert scale.shape[0] == weight.shape[1], "Scale must have the same number of elements as the weight"
+        scaled_q_error_T = torch.diag(scale) @ weight.transpose(0, 1)
+    elif scale.ndim == 2:
+        assert scale.shape[0] == scale.shape[1], "Scale must be a square matrix"
+        scaled_q_error_T = scale @ weight.transpose(0, 1)
+    else:
+        raise ValueError("Scale must be either a vector (diagonal) or a matrix") 
+
+    # Use SVD to decompose a matrix, default full_matrices is False to save parameters
+    U, S, V_T = torch.linalg.svd(scaled_q_error_T, full_matrices=False)
+
+    U = U[:, :reduced_rank]
+    S = S[:reduced_rank]
+    V_T = V_T[:reduced_rank, :]
+
+    if scale.ndim == 1:
+        A_T = _compute_scale_inv_dot_U(scale, U)
+        B_T = torch.diag(S) @ V_T # ab_quantizer(torch.diag(S) @ V_T) # TODO: since AB is not quantized, does that mean we don't need the ab_quantizer?
+    elif scale.ndim == 2:
+        A_T = _compute_scale_inv_dot_U(scale, U)
+        B_T = torch.diag(S) @ V_T # ab_quantizer(torch.diag(S) @ V_T) # TODO: since AB is not quantized, does that mean we don't need the ab_quantizer?
+
+    return {"L": B_T.T, "R": A_T.T, "U": U, "S": S, "Vh": V_T, "reduced_rank": reduced_rank}
 
 
 @torch.no_grad()
@@ -157,7 +217,7 @@ def replace_lora_weights_loftq(
     safetensor_loader = _SafetensorLoader(peft_model, model_path)
 
     # if too slow, consider adding tqdm as an option
-    for name, module in peft_model.named_modules():
+    for name, module in tqdm(peft_model.named_modules(), desc="Computing low-rank A and B from scale"):
         if not isinstance(module, Linear4bit):
             continue
 
@@ -166,14 +226,20 @@ def replace_lora_weights_loftq(
 
         any_match = True
         name = name[len(prefix) :]
+
         if AB_dict:
-            # "model.layers.0.self_attn.o_proj.A"
-            lora_A = AB_dict[name + ".A"].T
-            lora_B = AB_dict[name + ".B"].T
-            device = module.lora_A[adapter_name].weight.device
-            dtype = module.lora_A[adapter_name].weight.dtype
-            lora_A = lora_A.to(dtype).to(device)
-            lora_B = lora_B.to(dtype).to(device)
+            name = name[len(prefix) :]
+            tensor = safetensor_loader.get_tensor(name + ".weight")
+            reduced_rank = module.r[adapter_name]
+            scale = AB_dict[name + ".scale"] # name example: "model.layers.0.self_attn.o_proj.scale"
+            lora_A, lora_B = _loftq_init_new(module.weight, tensor, num_bits=4, reduced_rank=reduced_rank, scale=scale)
+            ###### Directly replace the weights with Loqer AB_dict ######
+            #     lora_A = AB_dict[name + ".A"].T # name example: "model.layers.0.self_attn.o_proj.A"
+            #     lora_B = AB_dict[name + ".B"].T
+            #     device = module.lora_A[adapter_name].weight.device
+            #     dtype = module.lora_A[adapter_name].weight.dtype
+            #     lora_A = lora_A.to(dtype).to(device)
+            #     lora_B = lora_B.to(dtype).to(device)
         else:
             tensor = safetensor_loader.get_tensor(name + ".weight")
 
@@ -620,10 +686,12 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         )
         model = get_peft_model(model, lora_config)
         if AB_dict is not None:
+            model = get_peft_model(model, lora_config)
             replace_lora_weights_loftq(model, AB_dict=AB_dict)
         else:
             logger.warning("AB_dict is None. The model will use the LoftQ initialization.")
-            replace_lora_weights_loftq(model)
+            model = PeftModel.from_pretrained(model, args.model_name_or_path, subfolder="loftq_init", is_trainable=True)
+            # replace_lora_weights_loftq(model) # QLORA
     else:
         model = PeftModel.from_pretrained(model, args.adapter_name_or_path, is_trainable=True)
     model.print_trainable_parameters()
@@ -876,11 +944,15 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             if completed_steps >= args.max_train_steps:
                 break
 
-        if args.dataset_name != "GSM8K":
+        if args.dataset_name.lower() != "gsm8k":
             return model
 
         # GSM8K Accuracy Evaluation
         model.eval()
+        # TODO: How does it even work? The model need to be still be training in the next iteration
+        # TODO: Do I have to revert the type?
+        # model.bfloat16() # This is needed for evaluating loftq
+        # model.to(getattr(torch, args.eval_dtype))
         gen_kwargs = {
             "max_new_tokens": args.max_target_length,
             "temperature": args.temperature,

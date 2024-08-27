@@ -36,19 +36,70 @@ def _mse_threshold_emoji(mse: float) -> str:
     else:
         return "❌"
 
+def load_calibration_dataloader(
+    tokenizer,
+    calibration_set,
+    perplexity_max_seq_length,
+    num_calibration_samples,
+    num_workers,
+    perplexity_eval_batch_size,
+    args: Namespace = None,
+    ):
+    """
+    Load the calibration dataloader for language model perplexity evaluation.
+
+    Args:
+        tokenizer (transformers.PreTrainedTokenizer): The tokenizer used for tokenizing the input data.
+        calibration_set (str): The name of the calibration dataset.
+        perplexity_max_seq_length (int): The maximum sequence length for the perplexity evaluation.
+        num_calibration_samples (int): The number of calibration samples.
+        num_workers (int): The number of workers for data loading.
+        perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
+        args (Namespace, optional): The ArgumentParser.Namespace arguments. Defaults to None.
+
+    Returns:
+        torch.utils.data.DataLoader: The calibration dataloader.
+
+    """
+    calibration_datamodule = get_data_module(
+        name=calibration_set,
+        tokenizer=tokenizer,
+        padding="max_length",
+        max_length=perplexity_max_seq_length,
+        num_raw_samples=20 * num_calibration_samples,
+        num_workers=num_workers,
+        args=args,
+    )
+
+    if calibration_set == "gsm8k":                    
+        calibration_dataloader = DataLoader(
+            calibration_datamodule["train"], 
+            shuffle=True, 
+            collate_fn=transformers.default_data_collator, 
+            batch_size=perplexity_eval_batch_size
+        )
+    else: 
+        "wikitext2, slim_pajama_6b"
+        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        calibration_dataloader = DataLoader(
+            calibration_datamodule["train"],
+            batch_size=perplexity_eval_batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=data_collator,
+        )                                                                         
+
+    return calibration_dataloader
+
 
 def calculate_AB_dict(
     loqer_scaling_mode,
     loqer_dtype,
     unquantized_model,
-    tokenizer,
     loqer_scaling_mode_map,
-    calibration_set,
+    calibration_dataloader,
     num_calibration_samples,
-    num_workers,
     perplexity_eval_batch_size,
-    perplexity_max_seq_length,
-    data_collator,
     loqer_sqrtm_implementation,
     loqer_sqrtm_num_iters,
     loqer_config,
@@ -59,16 +110,12 @@ def calculate_AB_dict(
 
     Args:
         unquantized_model (torch.nn.Module): The unquantized model. This model will be quantized by Loqer.
-        tokenizer: The tokenizer for the model.
         loqer_scaling_mode (str): The scaling mode for Loqer.
         loqer_dtype (torch.dtype): The data type for Loqer.
         loqer_scaling_mode_map (dict): The scaling mode map for Loqer.
-        calibration_set (str): The name of the calibration set.
+        calibration_dataloader (DataLoader): The calibration dataloader.
         num_calibration_samples (int): The number of calibration samples.
-        num_workers (int): The number of workers for data loading.
         perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
-        perplexity_max_seq_length (int): The maximum sequence length for perplexity evaluation.
-        data_collator: The data collator for data loading.
         loqer_sqrtm_implementation (str): The implementation for square root of matrix.
         loqer_sqrtm_num_iters (int): The number of iterations for square root of matrix.
         loqer_config: The configuration for Loqer.
@@ -91,22 +138,6 @@ def calculate_AB_dict(
         mode_map=loqer_scaling_mode_map,
     )
 
-    calibration_datamodule = get_data_module(
-        name=calibration_set,
-        tokenizer=tokenizer,
-        padding="max_length",
-        max_length=perplexity_max_seq_length,
-        num_raw_samples=20 * num_calibration_samples,
-        num_workers=num_workers,
-    )
-
-    calibration_dataloader = DataLoader(
-        calibration_datamodule["train"],
-        batch_size=perplexity_eval_batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        collate_fn=data_collator,
-    )
 
     mem_info = get_all_device_mem_info()
     logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
@@ -132,20 +163,29 @@ def calculate_AB_dict(
     share_scales(scale_dict, layers_to_register_and_share)
     logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
-    logger.info("🚀 Quantizing model...")
-    quantize_model(model, loqer_config)
+    debug = False
+    if debug:
+        logger.info("🚀 Quantizing model...")
+        quantize_model(model, loqer_config)
 
-    layers_to_approximate = find_layers_to_approximate(model)
-    logger.info("🚀 Loqer is enabled. Computing A & B...")
-    AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+        layers_to_approximate = find_layers_to_approximate(model)
+        logger.info("🚀 Loqer is enabled. Computing A & B...")
+        AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+        del scale_dict
+        attach_AB(model, layers_to_approximate, AB_dict)
+        mse_df_emoji = mse_df.copy()
+        mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
+        logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
+
+        return AB_dict, mse_df
+
+    scale_dict_rename = {} # add .scale to the layer name
+    for layer_name, scale in scale_dict.items():
+        scale_dict_rename[layer_name + ".scale"] = scale
     del scale_dict
-    attach_AB(model, layers_to_approximate, AB_dict)
-    mse_df_emoji = mse_df.copy()
-    mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
-    logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
-    
-    return AB_dict, mse_df
-    # logger.info(f"Model after approximation: \n{model}")
+
+    return scale_dict_rename, 0.0 # name without .scale
+
 
 def pipeline_loqer():
     parser = ArgumentParser()
@@ -248,9 +288,11 @@ def pipeline_loqer():
         args.update(fine_tuning_config)
         for entry, value in fine_tuning_config.items():
             override_args.pop(entry, None)
+    fine_tuning_args = Namespace(**args)
 
 
     logger.info(f"Configuration: \n{pformat(config, indent=4)}")
+    logger.info(f"Fine Turning Configuration: \n{pformat(args, indent=4)}")
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
 
     model_name = config["model_name"]
@@ -307,37 +349,49 @@ def pipeline_loqer():
         else:
             raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
 
-    # Load model and tokenizer
+    # ====================================================================
+    # Load the base unquantised model and tokenizer for calibration
+    # ====================================================================
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
         use_fast=not args['use_slow_tokenizer'],
         trust_remote_code=args['trust_remote_code'],
         )
+    # TODO: Could I use this tokenizer padding for all datasets? 
+    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+    tokenizer.padding_side = "left"  # Allow batched inference
+    tokenizer.truncation_side = "left"
+
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
         model.tie_weights()
+    
     device_map = create_device_map(model, device_map=device_map)
     logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if not disable_loqer:
         if AB_dict is None:
+            calibration_dataloader = load_calibration_dataloader(
+                tokenizer=tokenizer,
+                calibration_set=calibration_set,
+                perplexity_max_seq_length=perplexity_max_seq_length,
+                num_calibration_samples=num_calibration_samples,
+                num_workers=num_workers,
+                perplexity_eval_batch_size=perplexity_eval_batch_size,
+                args=fine_tuning_args
+            )
             AB_dict, mse_df = calculate_AB_dict(
                 loqer_scaling_mode=loqer_scaling_mode,
                 loqer_dtype=loqer_dtype,
                 unquantized_model=model,
-                tokenizer=tokenizer,
                 loqer_scaling_mode_map=loqer_scaling_mode_map,
-                calibration_set=calibration_set,
+                calibration_dataloader=calibration_dataloader,
                 num_calibration_samples=num_calibration_samples,
-                num_workers=num_workers,
                 perplexity_eval_batch_size=perplexity_eval_batch_size,
-                perplexity_max_seq_length=perplexity_max_seq_length,
-                data_collator=data_collator,
                 loqer_sqrtm_implementation=loqer_sqrtm_implementation,
                 loqer_sqrtm_num_iters=loqer_sqrtm_num_iters,
                 loqer_config=loqer_config,
@@ -349,13 +403,12 @@ def pipeline_loqer():
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
 
+    # ====================================================================
     # Fine-tuning
-    # TODO: not sure if this is necessary for all datasets (I copied this from the gsm8K)
-    tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
-    tokenizer.padding_side = "left"  # Allow batched inference
-    tokenizer.truncation_side = "left"
+    # ====================================================================
+    fine_tuning_model_name = fine_tuning_args.model_name_or_path # Note: This model name could be different from the loqer original model name because it could contains loftq initilization subfolder.
     config = transformers.AutoConfig.from_pretrained(
-        model_name,
+        fine_tuning_model_name,
         trust_remote_code=args['trust_remote_code'],
     )
     # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
@@ -363,8 +416,8 @@ def pipeline_loqer():
         if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
             raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name,
-        from_tf=bool(".ckpt" in model_name),
+        fine_tuning_model_name,
+        from_tf=bool(".ckpt" in fine_tuning_model_name),
         config=config,
         low_cpu_mem_usage=True,
         quantization_config=transformers.BitsAndBytesConfig(
@@ -374,12 +427,11 @@ def pipeline_loqer():
             bnb_4bit_compute_dtype=config.torch_dtype,
         ),
     )
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     logger.info("🚀 Fine-tuning...")
-    fine_tuning_args = Namespace(**args)
     model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
 
     if not disable_perplexity_eval:
+        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
         logger.info("🚀 Evaluating perplexity...")
         eval_datamodule = get_data_module(
             name=perplexity_evaluation_set,
