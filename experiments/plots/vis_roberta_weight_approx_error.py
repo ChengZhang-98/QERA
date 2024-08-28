@@ -136,4 +136,6 @@ for i, (layer_name_p, loftq_errors) in enumerate(loftq_errors_dict.items()):
 fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 1), ncol=6)
 fig.tight_layout()
 
-fig.savefig("roberta_weight_approx_error_vs_num_iters_3bit.pdf")
+fig.savefig("roberta_weight_approx_error_vs_num_iters_3bit.pdf", bbox_inches="tight")
+
+# %%
