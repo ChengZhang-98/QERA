@@ -166,7 +166,7 @@ def sweep(
         logits_ref.append(outputs_ref.logits)
 
     output_error = []
-    approx_error = []
+    approx_error = {}
 
     total_num_iters = 0
     for rank in ranks:
@@ -187,6 +187,10 @@ def sweep(
                     loftq_num_iters_ = loftq_num_iters
 
                 for loftq_num_iter in loftq_num_iters_:
+                    model_name_escape = model_name.replace("/", "_")
+                    run_name = (
+                        f"{model_name_escape}_rank_{rank}_bit_{bit}_adapter_{adapter_init}_loftq-{loftq_num_iter}-iter"
+                    )
                     adapted_model, error_dict = create_adapted_model(
                         model_name=model_name,
                         lora_target_modules=lora_target_modules,
@@ -208,16 +212,7 @@ def sweep(
                     adp_name = adapter_init if adapter_init != "loftq" else f"{adapter_init} ({loftq_num_iter}-iter)"
                     output_error.append([rank, bit, adp_name, error, quant_type])
                     if not (adapter_init == "loftq" and loftq_num_iter != max(loftq_num_iters)):
-                        approx_error.append(
-                            dict(
-                                rank=rank,
-                                quant_type=quant_type,
-                                n_bits=bit,
-                                adapter_init=adp_name,
-                                approx_error=error_dict,
-                                output_error=error,
-                            )
-                        )
+                        approx_error[run_name] = error_dict
                     prog_bar.update(1)
 
     return output_error, approx_error
@@ -254,7 +249,7 @@ if __name__ == "__main__":
 
     output_error, approx_error = sweep(
         quant_type="mxint",
-        ranks=[4, 16],
+        ranks=[16],
         bits=[3],
         adapter_init_methods=["loftq", "loqer"],
         loftq_num_iters=[1, 2, 3, 4, 5],
@@ -270,7 +265,7 @@ if __name__ == "__main__":
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     df.to_pickle(f"roberta_output_error_{timestamp}.pkl")
 
-    if False:
+    if True:
         with open(f"roberta_approx_error_{timestamp}.yaml", "w") as f:
             yaml.dump(approx_error, f)
 
