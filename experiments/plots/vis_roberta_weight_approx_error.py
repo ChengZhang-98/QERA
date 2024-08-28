@@ -72,6 +72,7 @@ FONT_SIZE_S = 7
 FONT_SIZE_M = 8
 FONT_SIZE_L = 10
 
+set_default_style()
 plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes
 plt.rc("axes", titlesize=FONT_SIZE_M)  # fontsize of the axes title
 plt.rc("axes", labelsize=FONT_SIZE_M)  # fontsize of the x and y labels
