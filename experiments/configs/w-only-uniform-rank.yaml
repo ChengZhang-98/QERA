@@ -18,22 +18,13 @@ perplexity_eval_batch_size: 4
 perplexity_eval_set: "wikitext2"
 perplexity_max_seq_length: 2048
 # lm-eval-harness
-lm_eval_tasks:
-  [
-    "arc_easy",
-    "lambada_openai",
-    "piqa",
-    "winogrande",
-    "arc_challenge",
-    "boolq",
-    "openbookqa",
-  ]
+lm_eval_tasks: ["loqer_benchmark_classic", "loqer_benchmark_hard"]
 lm_eval_batch_size: 4
 lm_eval_num_fewshot: 0
 
 # LoQER
 disable_loqer: false # if true, quantization only without A & B
-loqer_scaling_mode: rxx # "rxx" or "diagonal"
+loqer_scaling_mode: diag # "rxx" or "diagonal"
 loqer_sqrtm_implementation: blocked # "blocked" or "iterative"
 loqer_sqrtm_num_iters: 100
 loqer_scaling_mode_map: null
