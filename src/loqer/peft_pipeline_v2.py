@@ -128,7 +128,7 @@ def adapt_and_save_clm_model(
             progress_bar=True,
             description="Pretrained model profiling",
         )
-        logger.info(f"Profiling outputs:\n{pformat(profile_outputs, sort_dicts=False)}")
+        logger.info(f"FP32 outputs:\n{pformat(profile_outputs, sort_dicts=False)}")
         if adapter_init == "loqer":
             profiler_factory.remove_all_hooks()
             scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
@@ -145,8 +145,8 @@ def adapt_and_save_clm_model(
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
-            bnb_4bit_quant_storage=torch.bfloat16,  # !: uint8 will not work with qLoRA + FSDP
-            # bnb_4bit_quant_storage=torch.uint8,
+            # bnb_4bit_quant_storage=torch.bfloat16,  # !: uint8 will not work with qLoRA + FSDP; However, BitsAndBytes save_pretrained and load_pretrained do not work with storage_type=torch.bfloat16
+            bnb_4bit_quant_storage=torch.uint8,
         )
         model = transformers.AutoModelForCausalLM.from_pretrained(model_name_or_path, quantization_config=bnb_config)
     else:
@@ -386,12 +386,10 @@ def adapt_and_save_cls_model(
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_use_double_quant=bnb_4bit_use_double_quant,
             bnb_4bit_quant_type=bnb_quant_type_4bit,
-            bnb_4bit_quant_storage=torch.bfloat16,
+            # bnb_4bit_quant_storage=torch.bfloat16,  # !: uint8 will not work with qLoRA + FSDP; However, BitsAndBytes save_pretrained and load_pretrained do not work with storage_type=torch.bfloat16
+            bnb_4bit_quant_storage=torch.uint8,
             llm_int8_skip_modules=lora_modules_to_save,  # https://github.com/huggingface/peft/issues/1720
         )
-        # this num_labels is just a placeholder, it will be overwritten by the actual number of labels in the dataset
-        # !: don't set num_labels to 2, or the floating-point classifier will be mis-recognized as bnb weight by PeftModel.from_pretrained(..., ignore_mismatched_sizes=True)
-        # !: then ignore_mismatched_sizes=True will not work
         model = transformers.AutoModelForSequenceClassification.from_pretrained(
             model_name_or_path, quantization_config=bnb_config, num_labels=num_labels
         )
