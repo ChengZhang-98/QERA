@@ -317,7 +317,7 @@ def pipeline_loqer():
             use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+        logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -392,7 +392,7 @@ def pipeline_fp16_bf16_fp32():
         ],
     )
     parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=0
+        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
         "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
@@ -467,7 +467,7 @@ def pipeline_fp16_bf16_fp32():
             use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+        logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -630,7 +630,7 @@ def pipeline_q_baseline():
             use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+        logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -1018,7 +1018,7 @@ def pipeline_loqer_chunked():
                 use_cache=None,
                 batch_size=lm_eval_batch_size,
             )
-            logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+            logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
         # save perplexity results
         if not disable_perplexity_eval:

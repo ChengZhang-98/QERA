@@ -1,10 +1,14 @@
 import os
+from pathlib import Path
 import sys
 import re
 from itertools import chain
 import torch
 from accelerate import infer_auto_device_map
 from nvitop import CudaDevice, parse_cuda_visible_devices
+
+
+LOQER_SRC_DIR = Path(__file__).resolve().parent  # .../src/loqer
 
 
 def get_all_device_mem_info() -> dict[int, dict[str, int]]:
