@@ -73,7 +73,7 @@ METRICS_TO_COLLECT = {
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("lm_eval_results_yaml", type=str)
-    parser.add_argument("--output_csv", type=str, default=None)
+    parser.add_argument("--output-csv", type=str, default=None)
 
     args = parser.parse_args()
     return args
