@@ -241,7 +241,6 @@ def parse_args():
     parser.add_argument("--use_gradient_checkpointing", action="store_true", default=False)
     parser.add_argument("--wandb_tags", type=str, nargs="+", default=None)
     parser.add_argument("--evaluate_every_n_steps", type=int, default=None)
-    parser.add_argument
     args = parser.parse_args()
 
     # Sanity checks
