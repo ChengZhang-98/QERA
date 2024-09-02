@@ -4,6 +4,7 @@ import argparse
 import re
 
 import pandas as pd
+import numpy as np
 
 
 TASK_NAMES = [
@@ -85,6 +86,7 @@ def main():
     with open(args.lm_eval_results_yaml, "r") as f:
         results = yaml.safe_load(f)
 
+    n_samples = results["n-samples"]
     results = results["results"]
 
     for task_name_pattern in TASKS_TO_IGNORE:
@@ -97,14 +99,20 @@ def main():
         for task in results:
             if re.match(task_name_pattern, task):
                 if task_name_pattern not in merged_results:
-                    merged_results[task_name_pattern] = {"value": 0, "count": 0}
+                    merged_results[task_name_pattern] = {"value": [], "count": []}
 
-                merged_results[task_name_pattern]["value"] += results[task][metric]
-                merged_results[task_name_pattern]["count"] += 1
+                merged_results[task_name_pattern]["value"].append(results[task][metric])
+                merged_results[task_name_pattern]["count"].append(n_samples[task]["effective"])
 
     for task_name_pattern, metric in merged_results.items():
         task_name_pattern = TASKS_TO_MERGE.get(task_name_pattern, task_name_pattern)
-        df.loc[len(df)] = [task_name_pattern, METRICS_TO_COLLECT[task_name_pattern], metric["value"] / metric["count"]]
+        weights = metric["count"]
+        weights = [w / sum(weights) for w in weights]
+        df.loc[len(df)] = [
+            task_name_pattern,
+            METRICS_TO_COLLECT[task_name_pattern],
+            np.average(metric["value"], weights=weights),
+        ]
 
     print(df)
 
