@@ -56,17 +56,6 @@ def collect_runtime(model_name, loqer_scaling_mode):
     logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
-
-    layers_to_register_and_share = find_layers_to_register_scale_hook(model)
-
-    profiler_factory = register_scale_hooks(
-        model,
-        layers_to_register_and_share=layers_to_register_and_share,
-        mode=loqer_scaling_mode,
-        torch_dtype=torch.float32,
-        mode_map=None,
-    )
-
     calibration_datamodule = get_data_module(
         name="slim_pajama_6b",
         tokenizer=tokenizer,
@@ -75,7 +64,6 @@ def collect_runtime(model_name, loqer_scaling_mode):
         num_raw_samples=20 * 128,
         num_workers=256,
     )
-
     calibration_dataloader = DataLoader(
         calibration_datamodule["train"],
         batch_size=4,
@@ -83,11 +71,7 @@ def collect_runtime(model_name, loqer_scaling_mode):
         num_workers=8,
         collate_fn=data_collator,
     )
-
-    mem_info = get_all_device_mem_info()
-    logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
-
-    calibration_start = time.time()
+    inference_start = time.time()
     profile_outputs = evaluate_perplexity(
         model=model,
         eval_dataloader=calibration_dataloader,
@@ -96,7 +80,42 @@ def collect_runtime(model_name, loqer_scaling_mode):
         input_device=None,
         description="Calibrating",
     )
-    calibration_elapsed = time.time() - calibration_start
+    inference_elapsed = time.time() - inference_start
+
+    layers_to_register_and_share = find_layers_to_register_scale_hook(model)
+    patterns = ["layers.0.self_attn", "layers.0.mlp"]
+    layers_to_register_and_share_filtered = []
+    for layer in layers_to_register_and_share:
+        for pattern in patterns:
+            if pattern in layer["target_layer"]:
+                layers_to_register_and_share_filtered.append(layer)
+                break
+    print(f"layers_to_register_and_share_filtered: {layers_to_register_and_share_filtered}")
+    profiler_factory = register_scale_hooks(
+        model,
+        layers_to_register_and_share=layers_to_register_and_share_filtered,
+        mode=loqer_scaling_mode,
+        torch_dtype=torch.float32,
+        mode_map=None,
+    )
+
+    inference_and_calibrate_one_layer_start = time.time()
+    profile_outputs = evaluate_perplexity(
+        model=model,
+        eval_dataloader=calibration_dataloader,
+        num_samples=256 if loqer_scaling_mode != "identity" else 4,
+        progress_bar=True,
+        input_device=None,
+        description="Calibrating",
+    )
+    inference_and_calibrate_one_layer_elapsed = time.time() - inference_and_calibrate_one_layer_start
+
+    pure_inference_elapsed = inference_elapsed
+    rxx_clibration_elapsed = inference_and_calibrate_one_layer_elapsed - pure_inference_elapsed
+    rxx_clibration_elapsed = rxx_clibration_elapsed * model.config.num_hidden_layers + pure_inference_elapsed
+
+    mem_info = get_all_device_mem_info()
+    logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
 
     profiler_factory.remove_all_hooks()
     sqrtm_start = time.time()
@@ -109,25 +128,41 @@ def collect_runtime(model_name, loqer_scaling_mode):
     else:
         scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
     sqrtm_elapsed = time.time() - sqrtm_start
+    sqrtm_elapsed = sqrtm_elapsed * model.config.num_hidden_layers
 
     share_scales(scale_dict, layers_to_register_and_share)
     logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
     layers_to_approximate = find_layers_to_approximate(model)
+    layers_to_approximate_filtered = []
+    for layer in layers_to_approximate:
+        for pattern in patterns:
+            if pattern in layer:
+                layers_to_approximate_filtered.append(layer)
+                break
+    print(f"layers_to_approximate_filtered: {layers_to_approximate_filtered}")
     scale_calculation_start = time.time()
-    AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+    AB_dict, mse_df = compute_AB_and_approximation_error(
+        model, layers_to_approximate_filtered, scale_dict, loqer_config
+    )
     scale_calculation_elapsed = time.time() - scale_calculation_start
+    scale_calculation_elapsed = scale_calculation_elapsed * model.config.num_hidden_layers
 
-    return {"calibration": calibration_elapsed, "sqrtm": sqrtm_elapsed, "SVD": scale_calculation_elapsed}
+    return {
+        "pure_inference (part of calibration)": pure_inference_elapsed,
+        "calibration": rxx_clibration_elapsed,
+        "sqrtm": sqrtm_elapsed,
+        "SVD": scale_calculation_elapsed,
+    }
 
 
 if __name__ == "__main__":
     model_names = [
         "Cheng98/TinyLlama_v1.1",
-        "google/gemma-2-2b",
-        "meta-llama/Llama-2-7b-hf",
-        "google/gemma-2-9b",
-        "meta-llama/Llama-2-13b-hf",
+        # "google/gemma-2-2b",
+        # "meta-llama/Llama-2-7b-hf",
+        # "google/gemma-2-9b",
+        # "meta-llama/Llama-2-13b-hf",
     ]
 
     loqer_scaling_modes = ["diag", "rxx"]
