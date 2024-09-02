@@ -137,11 +137,19 @@ fig_llama_3_8b.savefig("llama_3_8b_coef_gate_proj.pdf", bbox_inches="tight")
 
 # %%
 fig, ax = plt.subplots(figsize=figsize)
-plot_corrcoef(llama_3_8b_coef_dict["model.layers.27.self_attn.k_proj"], ax, first_n_dims=64, cbar=True)
-fig.savefig("llama_3_8b_coef_layer_27_k_proj.pdf", bbox_inches="tight")
+plot_corrcoef(llama_3_8b_coef_dict["model.layers.0.self_attn.k_proj"], ax, first_n_dims=64, cbar=False)
+fig.savefig("llama_3_8b_coef_layer_0_k_proj.pdf", bbox_inches="tight")
 
 fig, ax = plt.subplots(figsize=figsize)
-plot_corrcoef(llama_3_8b_coef_dict["model.layers.0.mlp.down_proj"], ax, first_n_dims=64, cbar=True)
-fig.savefig("llama_3_8b_coef_layer_0_down_proj.pdf", bbox_inches="tight")
+plot_corrcoef(llama_3_8b_coef_dict["model.layers.3.self_attn.k_proj"], ax, first_n_dims=64, cbar=False)
+fig.savefig("llama_3_8b_coef_layer_3_k_proj.pdf", bbox_inches="tight")
+
+fig, ax = plt.subplots(figsize=figsize)
+plot_corrcoef(llama_3_8b_coef_dict["model.layers.3.self_attn.o_proj"], ax, first_n_dims=64, cbar=False)
+fig.savefig("llama_3_8b_coef_layer_3_o_proj.pdf", bbox_inches="tight")
+
+fig, ax = plt.subplots(figsize=figsize)
+plot_corrcoef(llama_3_8b_coef_dict["model.layers.3.mlp.down_proj"], ax, first_n_dims=64, cbar=True)
+fig.savefig("llama_3_8b_coef_layer_3_down_proj.pdf", bbox_inches="tight")
 
 # %%
