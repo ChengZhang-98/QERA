@@ -47,7 +47,7 @@ set_default_style()
 linewidth = 5.5  # inch
 lineheight = 9  # inch
 figsize = (linewidth * 0.5, linewidth * 0.5 * 0.75)
-markersize = 5
+markersize = 4
 FONT_SIZE_S = 7
 FONT_SIZE_M = 8
 FONT_SIZE_L = 10
