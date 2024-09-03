@@ -62,7 +62,7 @@ def visualize_roberta_logits_error(df):
         df.loc[mask, "output_error"],
         "^--",
         markersize=markersize,
-        color=get_color("cbf_lightred"),
+        color=get_color("cbf_darkred"),
         label="LoftQ (1-iter)",
         linewidth=linewidth,
     )
@@ -185,7 +185,7 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         df.loc[mask_loftq_r4, "output_error"],
         "^--",
         markersize=markersize,
-        color=get_color("cbf_lightred"),
+        color=get_color("cbf_darkred"),
         label="LoftQ (k=4)",
         linewidth=linewidth,
     )
