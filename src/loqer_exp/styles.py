@@ -80,6 +80,36 @@ def get_cz_color(name):
     return CZ_COLOR_TO_HEX[name]
 
 
+COLOR_BLIND_FRIENDLY_TO_HEX = {
+    # red
+    "cbf_darkred": "#c26a78",
+    "cbf_red": "#ef6678",
+    "cbf_lightred": "#eebab4",
+    # orange
+    "cbf_darkorange": "#d55e00",
+    "cbf_orange": "#ff5f01",
+    "cbf_lightorange": "#dcc16f",
+    # green
+    "cbf_darkgreen": "#337438",
+    "cbf_green": "#009f73",
+    "cbf_lightgreen": "#5ea899",
+    # blue
+    "cbf_darkblue": "#2f2584",
+    "cbf_blue": "#0072b1",
+    "cbf_lightblue": "#94caec",
+    # purple
+    "cbf_purple": "#9e4a96",
+    "cbf_lightpurple": "#cc79a7",
+    # grey
+    "cbf_grey": "#848484",
+    "cbf_lightgrey": "#dddddd",
+}
+
+
+def get_cbf_color(name):
+    return COLOR_BLIND_FRIENDLY_TO_HEX[name]
+
+
 def plot_palette(palette_name: str, figsize=(5, 3)):
     import matplotlib.pyplot as plt
 
@@ -87,6 +117,8 @@ def plot_palette(palette_name: str, figsize=(5, 3)):
         palette = CZ_COLOR_TO_HEX
     elif palette_name == "ic":
         palette = IMPERIAL_COLOR_TO_HEX
+    elif palette_name == "cbf":
+        palette = COLOR_BLIND_FRIENDLY_TO_HEX
     else:
         raise ValueError(f"Unknown palette name: {palette_name}")
 
@@ -97,3 +129,13 @@ def plot_palette(palette_name: str, figsize=(5, 3)):
     ax.legend(loc="upper center", ncol=3, bbox_to_anchor=(0.5, -0.05))
     ax.xaxis.set_ticklabels([])
     plt.show()
+
+
+def get_color(name):
+    if name in IMPERIAL_COLOR_TO_HEX:
+        return get_ic_color(name)
+    if name in CZ_COLOR_TO_HEX:
+        return get_cz_color(name)
+    if name in COLOR_BLIND_FRIENDLY_TO_HEX:
+        return get_cbf_color(name)
+    raise ValueError(f"Unknown color name: {name}")

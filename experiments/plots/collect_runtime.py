@@ -83,7 +83,12 @@ def collect_runtime(model_name, loqer_scaling_mode):
     inference_elapsed = time.time() - inference_start
 
     layers_to_register_and_share = find_layers_to_register_scale_hook(model)
-    patterns = ["layers.0.self_attn", "layers.0.mlp"]
+    patterns = [
+        "layers.0.self_attn.k_proj",
+        "layers.6.self_attn.o_proj",
+        "layers.14.mlp.gate_proj",
+        "layers.21.mlp.down_proj",
+    ]
     layers_to_register_and_share_filtered = []
     for layer in layers_to_register_and_share:
         for pattern in patterns:
@@ -130,7 +135,7 @@ def collect_runtime(model_name, loqer_scaling_mode):
     sqrtm_elapsed = time.time() - sqrtm_start
     sqrtm_elapsed = sqrtm_elapsed * model.config.num_hidden_layers
 
-    share_scales(scale_dict, layers_to_register_and_share)
+    share_scales(scale_dict, layers_to_register_and_share_filtered)
     logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
     layers_to_approximate = find_layers_to_approximate(model)
@@ -143,7 +148,7 @@ def collect_runtime(model_name, loqer_scaling_mode):
     print(f"layers_to_approximate_filtered: {layers_to_approximate_filtered}")
     scale_calculation_start = time.time()
     AB_dict, mse_df = compute_AB_and_approximation_error(
-        model, layers_to_approximate_filtered, scale_dict, loqer_config
+        model, layers_to_approximate_filtered, scale_dict, loqer_config, move_model_back=False
     )
     scale_calculation_elapsed = time.time() - scale_calculation_start
     scale_calculation_elapsed = scale_calculation_elapsed * model.config.num_hidden_layers
@@ -152,17 +157,18 @@ def collect_runtime(model_name, loqer_scaling_mode):
         "pure_inference (part of calibration)": pure_inference_elapsed,
         "calibration": rxx_clibration_elapsed,
         "sqrtm": sqrtm_elapsed,
-        "SVD": scale_calculation_elapsed,
+        "svd": scale_calculation_elapsed,
     }
 
 
 if __name__ == "__main__":
     model_names = [
-        "Cheng98/TinyLlama_v1.1",
+        # "Cheng98/TinyLlama_v1.1",
         # "google/gemma-2-2b",
         # "meta-llama/Llama-2-7b-hf",
-        # "google/gemma-2-9b",
         # "meta-llama/Llama-2-13b-hf",
+        "huggyllama/llama-30b",
+        # "meta-llama/Llama-2-70b-hf",
     ]
 
     loqer_scaling_modes = ["diag", "rxx"]

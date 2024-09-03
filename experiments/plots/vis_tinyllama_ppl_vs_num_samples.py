@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import yaml
 import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch
+from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_color
 
 plot_palette("cz")
 plot_palette("ic")
@@ -41,8 +41,8 @@ ppl_loqer_diag = [10.7007, 10.6807, 10.6749, 10.6586, 10.6594]
 
 fig, ax = plt.subplots(figsize=figsize)
 
-ax.plot(num_samples, ppl_lqer, "s-", label="LQER", markersize=markersize, color=get_cz_color("cz_purple"))
-ax.plot(num_samples, ppl_loqer_diag, "o-", label="LoQER+ (diag)", markersize=markersize, color=get_cz_color("cz_green"))
+ax.plot(num_samples, ppl_lqer, "s-", label="LQER", markersize=markersize, color=get_color("cbf_purple"))
+ax.plot(num_samples, ppl_loqer_diag, "o-", label="LoQER+ (diag)", markersize=markersize, color=get_color("cbf_green"))
 # ax.axhline(y=ppl_identity, color=get_cz_color("cz_lightorange"), linestyle="--", label="Identity")
 
 # log2 x-axis
