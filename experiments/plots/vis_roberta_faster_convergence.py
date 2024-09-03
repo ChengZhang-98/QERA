@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 import yaml
 import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette
+from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, get_color
 
 plot_palette("cz")
 plot_palette("ic")
+plot_palette("cbf")
 
 # %%
 
@@ -46,7 +47,7 @@ set_default_style()
 linewidth = 5.5  # inch
 lineheight = 9  # inch
 figsize = (linewidth * 0.5, linewidth * 0.5 * 0.75)
-markersize = 4
+markersize = 5
 FONT_SIZE_S = 7
 FONT_SIZE_M = 8
 FONT_SIZE_L = 10
@@ -61,9 +62,9 @@ plt.rc("figure", titlesize=FONT_SIZE_L)  # fontsize of the figure title
 plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
 
 color_map = {
-    "loqer": get_cz_color("cz_green"),
-    "loftq": get_cz_color("cz_lightorange"),
-    "qlora": get_cz_color("cz_grey"),
+    "loqer": get_color("cbf_green"),
+    "loftq": get_color("cbf_orange"),
+    "qlora": get_color("cbf_grey"),
 }
 
 label_map = {

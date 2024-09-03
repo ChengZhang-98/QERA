@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import yaml
 import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch
+from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_color
 
 
 def visualize_sqrtm_error_vs_rxx_size():
@@ -91,7 +91,7 @@ def visualize_sqrtm_error_vs_rxx_size():
         df.loc[df["layer"] == "model.layers.4.mlp.down_proj", "error_ratio"],
         "o--",
         markersize=markersize,
-        color=get_cz_color("cz_green"),
+        color=get_color("cbf_green"),
         label="layer 4",
     )
     plt.plot(
@@ -99,7 +99,7 @@ def visualize_sqrtm_error_vs_rxx_size():
         df.loc[df["layer"] == "model.layers.8.mlp.down_proj", "error_ratio"],
         "o--",
         markersize=markersize,
-        color=get_cz_color("cz_red"),
+        color=get_color("cbf_red"),
         label="layer 8",
     )
     plt.plot(
@@ -108,14 +108,14 @@ def visualize_sqrtm_error_vs_rxx_size():
         "o--",
         markersize=markersize,
         label="layer 12",
-        color=get_cz_color("cz_purple"),
+        color=get_color("cbf_purple"),
     )
     plt.plot(
         df.loc[df["layer"] == "model.layers.16.mlp.down_proj", "rxx_size"],
         df.loc[df["layer"] == "model.layers.16.mlp.down_proj", "error_ratio"],
         "o--",
         markersize=markersize,
-        color=get_cz_color("cz_blue"),
+        color=get_color("cbf_blue"),
         label="layer 16",
     )
     plt.plot(
@@ -123,7 +123,7 @@ def visualize_sqrtm_error_vs_rxx_size():
         df.loc[df["layer"] == "model.layers.20.mlp.down_proj", "error_ratio"],
         "o--",
         markersize=markersize,
-        color=get_cz_color("cz_orange"),
+        color=get_color("cbf_orange"),
         label="layer 20",
     )
     ax.set_ylabel(r"$R_{xx}$ error ratio $\log (\frac{\| R_{xx}\ Error \|_F}{\| R_{xx} \|_F})$")
