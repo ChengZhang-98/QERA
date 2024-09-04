@@ -16,25 +16,6 @@ plot_palette("ic")
 
 # %%
 
-"""
-Roberta-base, 4-bit BnB FP4 quantization
-
-seq_len=512, send 128 samples from wikitext2_mlm,
-and calculate the output logits error (mse between adapter logits_adapter and logits_fp32)
-
-wikitext2_mlm is a subset of roberta's pretraining data.
-
-Fig roberta_output_error_vs_rank_4bit.pdf:
-    - LoQER effectively reduces the output error, outperforming QLoRA and LoftQ by a clear margin
-    - Thoughout weight approximation error decreases, LoftQ does not guarantee a monotonic decrease in output error as the number of iterations increases
-    - Sometimes, LoftQ's output error may increase as the number of iterations increases, refer to next Fig
-
-Fig roberta_output_error_vs_loftq_iters_3bit.pdf:
-    - Increasing the number of iterations in LoftQ does not guarantee a monotonic decrease in output error
-
-
-"""
-
 
 def visualize_roberta_logits_error(df):
     # Index(['rank', 'bits', 'adapter_init', 'output_error', 'quant_type'], dtype='object')
@@ -45,9 +26,9 @@ def visualize_roberta_logits_error(df):
     lineheight = 9  # inch
     figsize = (linewidth * 0.8, linewidth * 0.8 * 0.75)
     markersize = 6
-    FONT_SIZE_S = 7
-    FONT_SIZE_M = 8
-    FONT_SIZE_L = 10
+    FONT_SIZE_S = 10
+    FONT_SIZE_M = 11
+    FONT_SIZE_L = 12
 
     plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes
     plt.rc("axes", titlesize=FONT_SIZE_M)  # fontsize of the axes title
@@ -143,9 +124,9 @@ def visualize_roberta_loftq_output_errors_3bit(df):
     lineheight = 9  # inch
     figsize = (linewidth * 0.8, linewidth * 0.8 * 0.75)
     markersize = 6
-    FONT_SIZE_S = 7
-    FONT_SIZE_M = 8
-    FONT_SIZE_L = 10
+    FONT_SIZE_S = 10
+    FONT_SIZE_M = 11
+    FONT_SIZE_L = 12
 
     plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes
     plt.rc("axes", titlesize=FONT_SIZE_M)  # fontsize of the axes title
@@ -197,7 +178,7 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         "^--",
         markersize=markersize,
         color=get_cz_color("cz_darkred"),
-        label="LoftQ (r=4)",
+        label="LoftQ (k=4)",
     )
     plt.plot(
         num_iters,
@@ -205,7 +186,7 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         "^:",
         markersize=markersize,
         color=get_cz_color("cz_lightred"),
-        label="LoftQ (r=8)",
+        label="LoftQ (k=8)",
     )
     plt.plot(
         num_iters,
@@ -213,15 +194,15 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         "^-",
         markersize=markersize,
         color=get_cz_color("cz_lightorange"),
-        label="LoftQ (r=16)",
+        label="LoftQ (k=16)",
     )
 
     loqer_error_r4 = df.loc[mask_loqer_r4, "output_error"].values[0]
-    plt.axhline(loqer_error_r4, color=get_cz_color("cz_darkgreen"), linestyle="--", label="LoQER (r=4)")
+    plt.axhline(loqer_error_r4, color=get_cz_color("cz_darkgreen"), linestyle="--", label="LoQER (k=4)")
     loqer_error_r8 = df.loc[mask_loqer_r8, "output_error"].values[0]
-    plt.axhline(loqer_error_r8, color=get_cz_color("cz_green"), linestyle=":", label="LoQER (r=8)")
+    plt.axhline(loqer_error_r8, color=get_cz_color("cz_green"), linestyle=":", label="LoQER (k=8)")
     loqer_error_r16 = df.loc[mask_loqer_r16, "output_error"].values[0]
-    plt.axhline(loqer_error_r16, color=get_cz_color("cz_lightgreen"), linestyle="-", label="LoQER (r=16)")
+    plt.axhline(loqer_error_r16, color=get_cz_color("cz_lightgreen"), linestyle="-", label="LoQER (k=16)")
 
     ax.set_ylabel(r"Output logits error")
     ax.set_xlabel(r"LoftQ num iterations")
@@ -241,3 +222,5 @@ df_3bit = df_3bit.sort_values(by=["adapter_init", "rank"])
 print(df_3bit)
 fig, ax = visualize_roberta_loftq_output_errors_3bit(df_3bit)
 fig.savefig("roberta_output_error_vs_loftq_iters_3bit.pdf", bbox_inches="tight")
+
+# %%

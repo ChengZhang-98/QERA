@@ -16,3 +16,5 @@ jamie/
 hx1/
 
 justfile
+
+*.safetensors

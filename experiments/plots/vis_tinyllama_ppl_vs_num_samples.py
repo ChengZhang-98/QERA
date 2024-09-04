@@ -20,9 +20,9 @@ linewidth = 5.5  # inch
 lineheight = 9  # inch
 figsize = (linewidth * 0.5, linewidth * 0.5 * 0.75)
 markersize = 4
-FONT_SIZE_S = 7
-FONT_SIZE_M = 8
-FONT_SIZE_L = 10
+FONT_SIZE_S = 9
+FONT_SIZE_M = 10
+FONT_SIZE_L = 11
 
 plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes
 plt.rc("axes", titlesize=FONT_SIZE_M)  # fontsize of the axes title
