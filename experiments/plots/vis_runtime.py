@@ -25,6 +25,7 @@ FONT_SIZE_ANNO = 6
 FONT_SIZE_S = 9
 FONT_SIZE_M = 10
 FONT_SIZE_L = 11
+textweight = 600
 
 plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes
 plt.rc("axes", titlesize=FONT_SIZE_M)  # fontsize of the axes title
@@ -92,6 +93,7 @@ axes.bar(
     color=get_cbf_color("cbf_lightblue"),
     bottom=bottoms,
 )
+
 bottoms += diag_calibration_times
 axes.bar(
     num_params,
@@ -120,7 +122,17 @@ for i, (p, t) in enumerate(zip(num_params, total)):
         xytext=(0, 5),
         ha="center",
         fontsize=FONT_SIZE_ANNO,
-        weight="bold",
+        weight=textweight,
+    )
+    # annotate "A" under the bars
+    axes.annotate(
+        "A",
+        (p, 0),
+        textcoords="offset points",
+        xytext=(0, -5),
+        ha="center",
+        fontsize=FONT_SIZE_ANNO,
+        weight=textweight,
     )
 
 # # rxx bar next to diag
@@ -164,7 +176,7 @@ for i, (p, t) in enumerate(zip(num_params, total)):
             xytext=(0, 5),
             ha="center",
             fontsize=FONT_SIZE_ANNO,
-            weight="bold",
+            weight=textweight,
         )
     else:
         axes.annotate(
@@ -174,8 +186,19 @@ for i, (p, t) in enumerate(zip(num_params, total)):
             xytext=(0, 5),
             ha="center",
             fontsize=FONT_SIZE_ANNO,
-            weight="bold",
+            weight=textweight,
         )
+    # annotate "E" under the bars
+
+    axes.annotate(
+        "E",
+        (p + BAR_WIDTH, 0),
+        textcoords="offset points",
+        xytext=(0, -5),
+        ha="center",
+        fontsize=FONT_SIZE_ANNO,
+        weight=textweight,
+    )
 
 
 axes.set_xticks(num_params)
