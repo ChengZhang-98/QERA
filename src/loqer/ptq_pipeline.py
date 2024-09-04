@@ -395,7 +395,7 @@ def pipeline_fp16_bf16_fp32():
         "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default="auto"
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
@@ -415,6 +415,8 @@ def pipeline_fp16_bf16_fp32():
     lm_eval_tasks = args.lm_eval_tasks
     lm_eval_num_fewshot = args.lm_eval_num_fewshot
     lm_eval_batch_size = args.lm_eval_batch_size
+    if not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
     disable_perplexity_eval = args.disable_perplexity_eval
     disable_lm_eval = args.disable_lm_eval
 
