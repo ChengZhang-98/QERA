@@ -113,6 +113,13 @@ def pipeline_loqer():
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
     parser.add_argument("--overwrite-output-dir", "-ow", dest="overwrite_output_dir", action="store_true", default=None)
+    parser.add_argument(
+        "--max-position-embeddings",
+        dest="max_position_embeddings",
+        type=int,
+        default=None,
+        help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
+    )
 
     args = parser.parse_args()
     args = vars(args)
@@ -147,6 +154,7 @@ def pipeline_loqer():
     lm_eval_batch_size = config["lm_eval_batch_size"]
     if isinstance(lm_eval_batch_size, str) and not "auto" in lm_eval_batch_size:
         lm_eval_batch_size = int(lm_eval_batch_size)
+    max_position_embeddings = config["max_position_embeddings"]
 
     disable_loqer = config["disable_loqer"]
     loqer_scaling_mode = config["loqer_scaling_mode"]
@@ -188,8 +196,11 @@ def pipeline_loqer():
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    other_model_kwargs = {}
+    if max_position_embeddings is not None:
+        other_model_kwargs["max_position_embeddings"] = max_position_embeddings
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager", **other_model_kwargs
     )
     model.eval()
     if hasattr(model, "tie_weights"):
@@ -276,7 +287,7 @@ def pipeline_loqer():
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
 
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=eval_dtype, _attn_implementation="eager"
+        model_name, torch_dtype=eval_dtype, _attn_implementation="eager", **other_model_kwargs
     )
     if hasattr(model, "tie_weights"):
         model.tie_weights()
@@ -401,6 +412,13 @@ def pipeline_fp16_bf16_fp32():
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
+    parser.add_argument(
+        "--max-position-embeddings",
+        dest="max_position_embeddings",
+        type=int,
+        default=None,
+        help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
+    )
 
     args = parser.parse_args()
 
@@ -428,7 +446,12 @@ def pipeline_fp16_bf16_fp32():
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+    other_model_kwargs = {}
+    if args.max_position_embeddings is not None:
+        other_model_kwargs["max_position_embeddings"] = args.max_position_embeddings
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=dtype, _attn_implementation="eager", **other_model_kwargs
+    )
     model.eval()
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
@@ -768,6 +791,7 @@ def pipeline_loqer_chunked():
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
+    parser.add_argument("--max-position-embeddings", dest="max_position_embeddings", type=int, default=None)
     parser.add_argument("--layers-per-chunk", dest="layers_per_chunk", type=int, help="Layers per chunk", default=None)
     parser.add_argument("--chunk-id", dest="chunk_id", type=int, help="Chunk ID", default=None)
 
@@ -827,6 +851,9 @@ def pipeline_loqer_chunked():
     AB_dict_dir = output_dir.joinpath("AB_dict")
     missing_chunks = _verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None)
     assert not (len(missing_chunks) > 0 and chunk_id is None), f"Missing chunks: {missing_chunks}"
+    other_model_kwargs = {}
+    if config["max_position_embeddings"] is not None:
+        other_model_kwargs["max_position_embeddings"] = config["max_position_embeddings"]
 
     if len(missing_chunks) > 0:
         # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
@@ -851,8 +878,9 @@ def pipeline_loqer_chunked():
 
         # Load model and tokenizer
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager", **other_model_kwargs
         )
         model.eval()
         if hasattr(model, "tie_weights"):
@@ -954,7 +982,7 @@ def pipeline_loqer_chunked():
         # Load model and tokenizer
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=eval_dtype, _attn_implementation="eager"
+            model_name, torch_dtype=eval_dtype, _attn_implementation="eager", **other_model_kwargs
         )
         model.eval()
         if hasattr(model, "tie_weights"):
