@@ -195,7 +195,7 @@ def pipeline_loqer():
     if hasattr(model, "tie_weights"):
         model.tie_weights()
     device_map_ = create_device_map(model, device_map=device_map)
-    logger.info(f"Device map: {device_map}")
+    logger.info(f"Device map: {device_map_}")
     model = dispatch_model(model, device_map_)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
