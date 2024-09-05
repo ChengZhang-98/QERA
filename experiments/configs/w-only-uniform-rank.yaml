@@ -21,6 +21,7 @@ perplexity_max_seq_length: 2048
 lm_eval_tasks: ["loqer_benchmark_classic", "loqer_benchmark_hard"]
 lm_eval_batch_size: 4
 lm_eval_num_fewshot: 0
+max_position_embeddings: null
 
 # LoQER
 disable_loqer: false # if true, quantization only without A & B
