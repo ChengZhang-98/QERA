@@ -1,4 +1,5 @@
 from typing import List, Optional, Union
+import torch
 from lm_eval.models.huggingface import HFLM
 from lm_eval.evaluator import simple_evaluate as _simple_evaluate  # as evaluate_harness_downstream
 from lm_eval.utils import make_table as harness_make_table
@@ -7,6 +8,7 @@ from lm_eval.tasks import TaskManager
 from ..utils import LOQER_SRC_DIR
 
 
+@torch.no_grad()
 def evaluate_harness_downstream(
     model,
     tasks: Optional[List[Union[str, dict, object]]] = None,

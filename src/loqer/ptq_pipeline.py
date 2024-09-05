@@ -82,7 +82,7 @@ def pipeline_loqer():
         "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=None
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default=None
     )
     parser.add_argument(
         "--disable-loqer", dest="disable_loqer", action="store_true", help="Disable Loqer", default=None
@@ -145,6 +145,8 @@ def pipeline_loqer():
     lm_eval_tasks = config["lm_eval_tasks"]
     lm_eval_num_fewshot = config["lm_eval_num_fewshot"]
     lm_eval_batch_size = config["lm_eval_batch_size"]
+    if isinstance(lm_eval_batch_size, str) and not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
 
     disable_loqer = config["disable_loqer"]
     loqer_scaling_mode = config["loqer_scaling_mode"]
@@ -192,9 +194,9 @@ def pipeline_loqer():
     model.eval()
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device_map = create_device_map(model, device_map=device_map)
+    device_map_ = create_device_map(model, device_map=device_map)
     logger.info(f"Device map: {device_map}")
-    model = dispatch_model(model, device_map)
+    model = dispatch_model(model, device_map_)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if not disable_loqer and AB_dict is None:
@@ -248,6 +250,7 @@ def pipeline_loqer():
         else:
             scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
 
+        del profiler_factory
         share_scales(scale_dict, layers_to_register_and_share)
         logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
@@ -260,7 +263,7 @@ def pipeline_loqer():
             logger.info("🚀 Loqer is enabled. Computing A & B...")
             AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
             del scale_dict
-            attach_AB(model, layers_to_approximate, AB_dict)
+            # attach_AB(model, layers_to_approximate, AB_dict)
             mse_df_emoji = mse_df.copy()
             mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
             logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
@@ -268,10 +271,21 @@ def pipeline_loqer():
             logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
             mse_df = None
-            attach_AB(model, layers_to_approximate, AB_dict)
+            # attach_AB(model, layers_to_approximate, AB_dict)
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
-    # logger.info(f"Model after approximation: \n{model}")
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=eval_dtype, _attn_implementation="eager"
+    )
+    if hasattr(model, "tie_weights"):
+        model.tie_weights()
+    model.eval()
+    quantize_model(model, loqer_config)
+    if not disable_loqer:
+        attach_AB(model, layers_to_approximate, AB_dict)
+    device_map_ = create_device_map(model, device_map=device_map)
+    model = dispatch_model(model, device_map_)
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -290,8 +304,6 @@ def pipeline_loqer():
             num_workers=num_workers,
             collate_fn=data_collator,
         )
-        model = model.to(eval_dtype)
-        model = dispatch_model(model, device_map)
         ppl_results = evaluate_perplexity(
             model=model,
             eval_dataloader=eval_dataloader,
@@ -308,8 +320,6 @@ def pipeline_loqer():
 
     if not disable_lm_eval:
         logger.info("🚀 Evaluating lm-eval downstream tasks...")
-        model = model.to(eval_dtype)
-        model = dispatch_model(model, device_map)
         lm_eval_results = evaluate_harness_downstream(
             model,
             tasks=lm_eval_tasks,
@@ -381,15 +391,7 @@ def pipeline_fp16_bf16_fp32():
         type=str,
         nargs="+",
         help="LM eval tasks",
-        default=[
-            "arc_easy",
-            "lambada_openai",
-            "piqa",
-            "winogrande",
-            "arc_challenge",
-            "boolq",
-            "openbookqa",
-        ],
+        default=["loqer_benchmark_classic", "loqer_benchmark_hard"],
     )
     parser.add_argument(
         "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
@@ -700,7 +702,6 @@ def pipeline_loqer_chunked():
     parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default=None)
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=None)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
-    # parser.add_argument("--AB-dict", dest="AB_dict", type=str, help="AB dict", default=None)
     parser.add_argument("--calibration-set", dest="calibration_set", type=str, help="Calibration set", default=None)
     parser.add_argument(
         "--num-calibration-samples",
@@ -801,6 +802,8 @@ def pipeline_loqer_chunked():
     lm_eval_tasks = config["lm_eval_tasks"]
     lm_eval_num_fewshot = config["lm_eval_num_fewshot"]
     lm_eval_batch_size = config["lm_eval_batch_size"]
+    if isinstance(lm_eval_batch_size, str) and not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
 
     disable_loqer = config["disable_loqer"]
     loqer_scaling_mode = config["loqer_scaling_mode"]
@@ -951,7 +954,7 @@ def pipeline_loqer_chunked():
         # Load model and tokenizer
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+            model_name, torch_dtype=eval_dtype, _attn_implementation="eager"
         )
         model.eval()
         if hasattr(model, "tie_weights"):
@@ -991,7 +994,6 @@ def pipeline_loqer_chunked():
                 num_workers=num_workers,
                 collate_fn=data_collator,
             )
-            model = model.to(eval_dtype)
             model = dispatch_model(model, device_map)
             mem_info = get_all_device_mem_info()
             logger.info(f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}")
@@ -1011,7 +1013,6 @@ def pipeline_loqer_chunked():
 
         if not disable_lm_eval:
             logger.info("🚀 Evaluating lm-eval downstream tasks...")
-            model = model.to(eval_dtype)
             model = dispatch_model(model, device_map)
             lm_eval_results = evaluate_harness_downstream(
                 model,
