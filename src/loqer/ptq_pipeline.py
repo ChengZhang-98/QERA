@@ -761,7 +761,7 @@ def pipeline_loqer_chunked():
         "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=None
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default=None
     )
     parser.add_argument(
         "--disable-loqer", dest="disable_loqer", action="store_true", help="Disable Loqer", default=None
