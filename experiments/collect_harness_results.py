@@ -2,6 +2,7 @@ from pathlib import Path
 import yaml
 import argparse
 import re
+import datetime
 
 import pandas as pd
 import numpy as np
@@ -45,6 +46,7 @@ TASK_NAMES = [
     "loqer_benchmark_hard",
     "wikitext",
     "winogrande",
+    "mmlu"
 ]
 
 TASKS_TO_MERGE = {
@@ -68,23 +70,31 @@ METRICS_TO_COLLECT = {
     "leaderboard_mmlu_pro": "acc,none",
     "wikitext": "word_perplexity,none",
     "winogrande": "acc,none",
+    "mmlu": "acc,none",
 }
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("lm_eval_results_yaml", type=str)
-    parser.add_argument("--output-csv", type=str, default=None)
+    parser.add_argument("--output-csv", "-o", dest="output_csv", type=str, default=None)
 
     args = parser.parse_args()
     return args
 
 
 def main():
+    class SafeLoaderIgnoreUnknown(yaml.SafeLoader):
+        def ignore_unknown(self, node):
+            return None
+
+    SafeLoaderIgnoreUnknown.add_constructor(None, SafeLoaderIgnoreUnknown.ignore_unknown)
+
     args = parse_args()
 
     with open(args.lm_eval_results_yaml, "r") as f:
-        results = yaml.safe_load(f)
+        results = yaml.load(f, Loader=SafeLoaderIgnoreUnknown)
+    yaml_path = Path(args.lm_eval_results_yaml).as_posix()
 
     n_samples = results["n-samples"]
     results = results["results"]
@@ -92,7 +102,7 @@ def main():
     for task_name_pattern in TASKS_TO_IGNORE:
         results.pop(task_name_pattern, None)
 
-    df = pd.DataFrame(columns=["task", "metric", "value"])
+    df = pd.DataFrame(columns=["yaml_path", "task", "metric", "value"])
 
     merged_results = {}
     for task_name_pattern, metric in METRICS_TO_COLLECT.items():
@@ -102,22 +112,34 @@ def main():
                     merged_results[task_name_pattern] = {"value": [], "count": []}
 
                 merged_results[task_name_pattern]["value"].append(results[task][metric])
-                merged_results[task_name_pattern]["count"].append(n_samples[task]["effective"])
+                if task in n_samples:
+                    merged_results[task_name_pattern]["count"].append(n_samples[task]["effective"])
+                else:
+                    merged_results[task_name_pattern]["count"].append(1)
 
     for task_name_pattern, metric in merged_results.items():
         task_name_pattern = TASKS_TO_MERGE.get(task_name_pattern, task_name_pattern)
         weights = metric["count"]
         weights = [w / sum(weights) for w in weights]
         df.loc[len(df)] = [
+            yaml_path,
             task_name_pattern,
             METRICS_TO_COLLECT[task_name_pattern],
             np.average(metric["value"], weights=weights),
         ]
 
-    print(df)
+    df = df.sort_values(by=["task"]).transpose()
+    print("🔍 " + yaml_path)
+    print(df.loc[["task", "metric", "value"]])
 
     if args.output_csv:
-        df.to_csv(args.output_csv, index=False)
+        if args.output_csv == "auto":
+            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            output_csv = Path(args.lm_eval_results_yaml).absolute().as_posix().replace(".yaml", f"-{timestamp}.csv")
+        else:
+            output_csv = args.output_csv
+        df.to_csv(output_csv, index=False)
+        print(f"📝 csv file saved to {output_csv}")
 
 
 if __name__ == "__main__":
