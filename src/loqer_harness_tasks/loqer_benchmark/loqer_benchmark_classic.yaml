@@ -10,6 +10,6 @@ task:
   - task: arc_challenge
     fewshot_split: validation
     num_fewshot: 25
+  - task: mmlu
+    num_fewshot: 5
   - task: wikitext
-  # - task: gsm8k # generate-base, slow
-  #   num_fewshot: 5
