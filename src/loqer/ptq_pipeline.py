@@ -517,7 +517,12 @@ def pipeline_fp16_bf16_fp32():
 
 def pipeline_q_baseline():
     from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig, HqqConfig
-    from auto_gptq import exllama_set_max_input_length
+    gptq_available = False
+    try:
+        from auto_gptq import exllama_set_max_input_length
+        gptq_available = True
+    except ImportError:
+        pass
 
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
@@ -572,6 +577,12 @@ def pipeline_q_baseline():
         default=None,
         help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
     )
+    parser.add_argument(
+        "--hqq-group-size",
+        dest="hqq_group_size",
+        type=int,
+        default=128,
+    )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
 
@@ -595,6 +606,8 @@ def pipeline_q_baseline():
     disable_perplexity_eval = args.disable_perplexity_eval
     disable_lm_eval = args.disable_lm_eval
 
+    hqq_group_size = args.hqq_group_size
+
     other_model_kwargs = {}
     if args.max_position_embeddings is not None:
         other_model_kwargs["max_position_embeddings"] = args.max_position_embeddings
@@ -615,7 +628,7 @@ def pipeline_q_baseline():
             model_name, torch_dtype=dtype, quantization_config=quantization_config, **other_model_kwargs
         )
     elif q_method == "hqq-4bit":
-        hqq_config = HqqConfig(nbits=4, group_size=128, quant_zero=False, quant_scale=False, axis=0)
+        hqq_config = HqqConfig(nbits=4, group_size=hqq_group_size, quant_zero=False, quant_scale=False, axis=0)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
@@ -624,7 +637,7 @@ def pipeline_q_baseline():
             **other_model_kwargs,
         )
     elif q_method == "hqq-3bit":
-        hqq_config = HqqConfig(nbits=3, group_size=128, quant_zero=False, quant_scale=False, axis=0)
+        hqq_config = HqqConfig(nbits=3, group_size=hqq_group_size, quant_zero=False, quant_scale=False, axis=0)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
@@ -633,7 +646,7 @@ def pipeline_q_baseline():
             **other_model_kwargs,
         )
     elif q_method == "hqq-2bit":
-        hqq_config = HqqConfig(nbits=2, group_size=64, quant_zero=False, quant_scale=False, axis=0)
+        hqq_config = HqqConfig(nbits=2, group_size=hqq_group_size, quant_zero=False, quant_scale=False, axis=0)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_name,
             torch_dtype=torch.float16,
@@ -646,6 +659,7 @@ def pipeline_q_baseline():
             model_name, torch_dtype=dtype, device_map="cuda", **other_model_kwargs
         )
     elif q_method == "gptq":
+        assert gptq_available, "auto-gptq is not installed"
         model = exllama_set_max_input_length(model, 8192)
     else:
         model = transformers.AutoModelForCausalLM.from_pretrained(
