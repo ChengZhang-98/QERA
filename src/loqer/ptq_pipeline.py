@@ -516,13 +516,18 @@ def pipeline_fp16_bf16_fp32():
 
 
 def pipeline_q_baseline():
-    from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
+    from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig, HqqConfig
     from auto_gptq import exllama_set_max_input_length
 
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
-    parser.add_argument("--load-in-4bit", dest="load_in_4bit", action="store_true", help="Load in 4-bit model")
-    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
+    parser.add_argument(
+        "q_method",
+        type=str,
+        help="Quantization method",
+        choices=["bnb-4bit", "gptq", "awq", "bnb-8bit", "hqq-4bit", "hqq-3bit", "hqq-2bit"],
+    )
+    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="bfloat16")
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
     parser.add_argument(
@@ -552,21 +557,20 @@ def pipeline_q_baseline():
         type=str,
         nargs="+",
         help="LM eval tasks",
-        default=[
-            "arc_easy",
-            "lambada_openai",
-            "piqa",
-            "winogrande",
-            "arc_challenge",
-            "boolq",
-            "openbookqa",
-        ],
+        default=["loqer_benchmark_classic", "loqer_benchmark_hard"],
     )
     parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=0
+        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default="auto"
+    )
+    parser.add_argument(
+        "--max-position-embeddings",
+        dest="max_position_embeddings",
+        type=int,
+        default=None,
+        help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
@@ -576,7 +580,7 @@ def pipeline_q_baseline():
     logger.info(f"Arguments: \n{pformat(vars(args), indent=4)}")
 
     model_name = args.model_name
-    load_in_4bit = args.load_in_4bit
+    q_method = args.q_method
     dtype = getattr(torch, args.dtype)
     num_workers = args.num_workers
     output_dir = Path(args.output_dir) if args.output_dir is not None else None
@@ -586,35 +590,68 @@ def pipeline_q_baseline():
     lm_eval_tasks = args.lm_eval_tasks
     lm_eval_num_fewshot = args.lm_eval_num_fewshot
     lm_eval_batch_size = args.lm_eval_batch_size
+    if not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
     disable_perplexity_eval = args.disable_perplexity_eval
     disable_lm_eval = args.disable_lm_eval
+
+    other_model_kwargs = {}
+    if args.max_position_embeddings is not None:
+        other_model_kwargs["max_position_embeddings"] = args.max_position_embeddings
 
     # check output directory
     if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # Load model and tokenizer
-    if load_in_4bit:
-        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype, quantization_config=quantization_config
+    if q_method in ["bnb-4bit", "bnb-8bit"]:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=q_method == "bnb-4bit",
+            load_in_8bit=q_method == "bnb-8bit",
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
         )
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, quantization_config=quantization_config, **other_model_kwargs
+        )
+    elif q_method == "hqq-4bit":
+        hqq_config = HqqConfig(nbits=4, group_size=128, quant_zero=False, quant_scale=False, axis=0)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cuda",
+            quantization_config=hqq_config,
+            **other_model_kwargs,
+        )
+    elif q_method == "hqq-3bit":
+        hqq_config = HqqConfig(nbits=3, group_size=128, quant_zero=False, quant_scale=False, axis=0)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cuda",
+            quantization_config=hqq_config,
+            **other_model_kwargs,
+        )
+    elif q_method == "hqq-2bit":
+        hqq_config = HqqConfig(nbits=2, group_size=64, quant_zero=False, quant_scale=False, axis=0)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cuda",
+            quantization_config=hqq_config,
+            **other_model_kwargs,
+        )
+    elif q_method == "awq":
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, device_map="cuda", **other_model_kwargs
+        )
+    elif q_method == "gptq":
+        model = exllama_set_max_input_length(model, 8192)
     else:
-        model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, device_map={"": 0})
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, device_map="cuda", **other_model_kwargs
+        )
     model.eval()
-
-    if load_in_4bit:
-        q_method = "bnb-4bit"
-    else:
-        if isinstance(model.config.quantization_config, GPTQConfig):
-            q_method = "gptq"
-            model = exllama_set_max_input_length(model, 8192)
-        elif isinstance(model.config.quantization_config, AwqConfig):
-            q_method = "awq"
-        elif isinstance(model.config.quantization_config, dict):
-            q_method = model.config.quantization_config["quant_method"]
-        else:
-            raise ValueError(f"Unknown quantization method: {model.config.quantization_config}")
 
     logger.info(f"🔊 Quantization method: {q_method}")
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
