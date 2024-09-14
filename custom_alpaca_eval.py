@@ -20,11 +20,13 @@ from alpaca_eval import constants, utils, analyze, annotators, decoders, metrics
 from alpaca_eval.types import AnyData, AnyLoadableDF, AnyPath
 from alpaca_eval.main import CUR_DIR
 
-from loqer.models import quantize_model
+from loqer.models import quantize_model, find_layers_to_approximate
 from loqer.approximate import attach_AB
 from loqer.utils import create_device_map
 
 logger = logging.getLogger("loqer." + __name__)
+
+WORKSPACE_DIR = Path(__file__).parents[1]
 
 
 class ListDataset(Dataset):
@@ -107,6 +109,7 @@ def huggingface_custom_completions(
     )
     model = AutoModelForCausalLM.from_pretrained(model_name, cache_dir=cache_dir, **model_kwargs)
     if loqer_config is not None:
+        layers_to_approximate = find_layers_to_approximate(model)
         if isinstance(loqer_config, str):
             with open(loqer_config) as f:
                 loqer_config = yaml.safe_load(f)
@@ -114,7 +117,7 @@ def huggingface_custom_completions(
         if AB_dict is not None:
             if isinstance(AB_dict, str):
                 AB_dict = torch.load(AB_dict)
-            model = attach_AB(model, AB_dict)
+            model = attach_AB(model, layers_to_approximate, AB_dict)
             logger.info(f"🔍 model quantized with AB_dict attached")
         else:
             logger.warning(f"🔍 model quantized without AB_dict attached")
@@ -157,14 +160,15 @@ def huggingface_custom_completions(
         model_kwargs={k: v for k, v in model_kwargs.items() if k != "trust_remote_code"},
         batch_size=batch_size,
     )
+    # gen_kwargs = dict(do_sample=do_sample, max_new_tokens=kwargs["max_new_tokens"])
     default_kwargs.update(kwargs)
-    logging.info(f"Kwargs to completion: {default_kwargs}")
+    logging.info(f"🔍 Kwargs to completion: {default_kwargs}")
     pipeline = transformers.pipeline(
         task="text-generation",
         model=model,
         tokenizer=tokenizer,
         **default_kwargs,
-        trust_remote_code=model_kwargs.get("trust_remote_code", False),
+        trust_remote_code=model_kwargs.get("trust_remote_code", True),
     )
 
     ## compute and log the time for completions

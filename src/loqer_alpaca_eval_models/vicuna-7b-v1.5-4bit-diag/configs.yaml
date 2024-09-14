@@ -1,0 +1,44 @@
+vicuna-7b-v1.5-4bit-diag:
+  prompt_template: "vicuna-7b-v1.5-test/prompt.txt"
+  fn_completions: "huggingface_custom_completions"
+  completions_kwargs:
+    model_name: "lmsys/vicuna-7b-v1.5"
+    AB_dict: checkpoints/alpaca_eval_AB_dict/vicuna-7b-v1.5-diag/AB_dict.pt
+    batch_size: 4
+    loqer_config:
+      default-1:
+        b_quantizer:
+          name: bypass
+        is_ptq: true
+        name: loqer
+        rank: 32
+        w_quantizer:
+          block_axis: -1
+          block_size: 32
+          name: mxint
+          width: 4
+        x_quantizer:
+          name: bypass
+      default-matmul:
+        name: flexible
+        w_quantizer:
+          name: bypass
+        x_quantizer:
+          name: bypass
+      model\.decoder\.layers\.[0-9]+\.(fc1|fc2): default-1
+      model\.decoder\.layers\.[0-9]+\.self_attn\.(bmm_0|bmm_1): default-matmul
+      model\.decoder\.layers\.[0-9]+\.self_attn\.(k|q|v|out)_proj: default-1
+      model\.layers\.[0-9]+\.mlp\.(gate|down|up)_proj: default-1
+      model\.layers\.[0-9]+\.mlp\.gate_up_proj: default-1
+      model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj: default-1
+      model\.layers\.[0-9]+\.self_attn\.(matmul_0|matmul_1): default-matmul
+      model\.layers\.[0-9]+\.self_attn\.qkv_proj: default-1
+    model_kwargs:
+      torch_dtype: "bfloat16"
+      _attn_implementation: "eager"
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "Vicuna 7B v1.5 (Diag, 4-bit)"
+  link: "https://huggingface.co/lmsys/vicuna-7b-v1.5"
