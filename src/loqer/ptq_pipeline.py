@@ -517,9 +517,11 @@ def pipeline_fp16_bf16_fp32():
 
 def pipeline_q_baseline():
     from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig, HqqConfig
+
     gptq_available = False
     try:
         from auto_gptq import exllama_set_max_input_length
+
         gptq_available = True
     except ImportError:
         pass
@@ -532,7 +534,7 @@ def pipeline_q_baseline():
         help="Quantization method",
         choices=["bnb-4bit", "gptq", "awq", "bnb-8bit", "hqq-4bit", "hqq-3bit", "hqq-2bit"],
     )
-    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="bfloat16")
+    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
     parser.add_argument(
@@ -581,7 +583,7 @@ def pipeline_q_baseline():
         "--hqq-group-size",
         dest="hqq_group_size",
         type=int,
-        default=128,
+        default=64,
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
