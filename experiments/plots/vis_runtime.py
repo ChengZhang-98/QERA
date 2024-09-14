@@ -23,7 +23,7 @@ figsize = (linewidth * 0.5, linewidth * 0.5 * 0.75)
 markersize = 4
 FONT_SIZE_ANNO = 6
 FONT_SIZE_S = 9
-FONT_SIZE_M = 10
+FONT_SIZE_M = 9
 FONT_SIZE_L = 11
 textweight = 600
 
@@ -222,7 +222,7 @@ axes.set_ylim(0, 6e4)
 axes.set_yticks([0, 6 * 3600, 12 * 3600])
 axes.set_yticklabels(["0", "6h", "12h"])
 axes.set_xlabel("Model size")
-axes.set_ylabel("Time")
+axes.set_ylabel("Quantization time")
 # put legend on top of axes[0]
 axes.legend(loc="upper left")
 plt.tight_layout()
