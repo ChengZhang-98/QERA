@@ -1,21 +1,13 @@
 import logging
 
 import torch
-from transformers.models.llama.modeling_llama import (
-    LlamaForCausalLM,
-    LlamaForSequenceClassification,
-)
-from transformers.models.opt.modeling_opt import (
-    OPTForCausalLM,
-    OPTForSequenceClassification,
-)
-from transformers.models.mistral.modeling_mistral import (
-    MistralForCausalLM,
-    MistralForSequenceClassification,
-)
+from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaForSequenceClassification
+from transformers.models.opt.modeling_opt import OPTForCausalLM, OPTForSequenceClassification
+from transformers.models.mistral.modeling_mistral import MistralForCausalLM, MistralForSequenceClassification
+from transformers.models.gemma2.modeling_gemma2 import Gemma2ForCausalLM, Gemma2ForSequenceClassification
+from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3ForSequenceClassification
 from transformers.models.deberta_v2.modeling_deberta_v2 import DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM
 from transformers.models.roberta.modeling_roberta import RobertaForSequenceClassification, RobertaForMaskedLM
-
 from .llama_decoder import (
     quantize_llama_model,
     find_layers_to_approximate_llama,
@@ -26,6 +18,16 @@ from .mistral_decoder import (
     quantize_mistral_model,
     find_layers_to_approximate_mistral,
     find_layers_to_register_scale_hook_mistral,
+)
+from .gemma2_decoder import (
+    quantize_gemma2_model,
+    find_layers_to_approximate_gemma2,
+    find_layers_to_register_scale_hook_gemma2,
+)
+from .phi3_decoder import (
+    quantize_phi3_model,
+    find_layers_to_approximate_phi3,
+    find_layers_to_register_scale_hook_phi3,
 )
 from .deberta_v2 import (
     quantize_deberta_v2,
@@ -45,6 +47,10 @@ def quantize_model(model, loqer_config) -> None:
         q_model = quantize_opt_model(model, loqer_config)
     elif isinstance(model, (MistralForCausalLM, MistralForSequenceClassification)):
         q_model = quantize_mistral_model(model, loqer_config)
+    elif isinstance(model, (Gemma2ForCausalLM, Gemma2ForSequenceClassification)):
+        q_model = quantize_gemma2_model(model, loqer_config)
+    elif isinstance(model, (Phi3ForCausalLM, Phi3ForSequenceClassification)):
+        q_model = quantize_phi3_model(model, loqer_config)
     elif isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM)):
         q_model = quantize_deberta_v2(model, loqer_config)
     elif isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM)):
@@ -64,6 +70,10 @@ def find_layers_to_approximate(model):
         return find_layers_to_approximate_opt(model)
     elif isinstance(model, (MistralForCausalLM, MistralForSequenceClassification)):
         return find_layers_to_approximate_mistral(model)
+    elif isinstance(model, (Gemma2ForCausalLM, Gemma2ForSequenceClassification)):
+        return find_layers_to_approximate_gemma2(model)
+    elif isinstance(model, (Phi3ForCausalLM, Phi3ForSequenceClassification)):
+        return find_layers_to_approximate_phi3(model)
     elif isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM)):
         return find_layers_to_approximate_deberta_v2(model)
     elif isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM)):
@@ -80,6 +90,10 @@ def find_layers_to_register_scale_hook(model):
         return find_layers_to_register_scale_hook_opt(model)
     elif isinstance(model, (MistralForCausalLM, MistralForSequenceClassification)):
         return find_layers_to_register_scale_hook_mistral(model)
+    elif isinstance(model, (Gemma2ForCausalLM, Gemma2ForSequenceClassification)):
+        return find_layers_to_register_scale_hook_gemma2(model)
+    elif isinstance(model, (Phi3ForCausalLM, Phi3ForSequenceClassification)):
+        return find_layers_to_register_scale_hook_phi3(model)
     elif isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM)):
         return find_layers_to_register_scale_hook_deberta_v2(model)
     elif isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM)):

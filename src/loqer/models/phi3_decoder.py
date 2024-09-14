@@ -1,62 +1,57 @@
 import logging
-import inspect
+from typing import Optional, Tuple
 import math
 from copy import deepcopy
-from typing import Optional, Tuple
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from torch import nn
 
-from transformers.models.mistral.modeling_mistral import (
+from transformers.models.phi3.modeling_phi3 import (
+    Phi3RMSNorm,
+    Phi3RotaryEmbedding,
+    Phi3LongRoPEScaledRotaryEmbedding,
+    Phi3DecoderLayer,
     ACT2FN,
-    MistralConfig,
-    MistralForCausalLM,
-    MistralForSequenceClassification,
-    MistralRotaryEmbedding,
-    MistralRMSNorm,
-    MistralDecoderLayer,
+    Cache,
     apply_rotary_pos_emb,
     repeat_kv,
-    is_flash_attn_2_available,
-    Cache,
+    Phi3ForCausalLM,
+    Phi3Config,
 )
 
-
-from ..quantize import get_quantized_func, get_quantized_layer_cls
+from ..quantize import get_quantized_layer_cls, get_quantized_func
 from ..utils import find_matched_pattern, get_layer_name
 
 logger = logging.getLogger(__name__)
 
 
-if is_flash_attn_2_available():
-    from transformers.models.mistral.modeling_mistral import _flash_attention_forward
-
-
-class MistralQuantizedMLP(nn.Module):
+class Phi3QuantizedMLP(nn.Module):
     def __init__(self, config, loqer_config: dict):
         super().__init__()
-        self.hidden_size = config.hidden_size
-        self.intermediate_size = config.intermediate_size
+
+        self.config = config
+        # self.gate_up_proj = nn.Linear(config.hidden_size, 2 * config.intermediate_size, bias=False)
+        # self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
         # fmt: off
-        self.gate_proj = get_quantized_layer_cls("linear", q_config=loqer_config["gate_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=loqer_config["gate_proj"])
-        self.up_proj = get_quantized_layer_cls("linear", q_config=loqer_config["up_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=loqer_config["up_proj"])
-        self.down_proj = get_quantized_layer_cls("linear", q_config=loqer_config["down_proj"])(self.intermediate_size, self.hidden_size, bias=False, q_config=loqer_config["down_proj"])
-        self.loqer_config = loqer_config
+        self.gate_up_proj = get_quantized_layer_cls("linear", q_config=loqer_config["gate_up_proj"])(config.hidden_size, 2 * config.intermediate_size, bias=False, q_config=loqer_config["gate_up_proj"])
+        self.down_proj = get_quantized_layer_cls("linear", q_config=loqer_config["down_proj"])(config.intermediate_size, config.hidden_size, bias=False, q_config=loqer_config["down_proj"])
         # fmt: on
-        self.act_fn = ACT2FN[config.hidden_act]
 
-    def forward(self, hidden_state):
-        return self.down_proj(self.act_fn(self.gate_proj(hidden_state)) * self.up_proj(hidden_state))
+        self.activation_fn = ACT2FN[config.hidden_act]
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        up_states = self.gate_up_proj(hidden_states)
+
+        gate, up_states = up_states.chunk(2, dim=-1)
+        up_states = up_states * self.activation_fn(gate)
+
+        return self.down_proj(up_states)
 
 
-class MistralQuantizedAttention(nn.Module):
-    """
-    Multi-headed attention from 'Attention Is All You Need' paper. Modified to use sliding window attention: Longformer
-    and "Generating Long Sequences with Sparse Transformers".
-    """
+class Phi3QuantizedAttention(nn.Module):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: MistralConfig, layer_idx: int, loqer_config: dict):
+    def __init__(self, config: Phi3Config, layer_idx: int, loqer_config):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -70,30 +65,44 @@ class MistralQuantizedAttention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = config.head_dim
+        self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
+        self.original_max_position_embeddings = config.original_max_position_embeddings
         self.rope_theta = config.rope_theta
+        self.rope_scaling = config.rope_scaling
         self.is_causal = True
 
-        # fmt: off
-        # self.q_proj = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
-        # self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        # self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
+        if (self.head_dim * self.num_heads) != self.hidden_size:
+            raise ValueError(
+                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+                f" and `num_heads`: {self.num_heads})."
+            )
+
+        op_size = self.num_heads * self.head_dim + 2 * (self.num_key_value_heads * self.head_dim)
         # self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
-        self.q_proj = get_quantized_layer_cls("linear", q_config=loqer_config["q_proj"])(self.hidden_size, self.num_heads * self.head_dim, bias=False, q_config=loqer_config["q_proj"])
-        self.k_proj = get_quantized_layer_cls("linear", q_config=loqer_config["k_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False, q_config=loqer_config["k_proj"])
-        self.v_proj = get_quantized_layer_cls("linear", q_config=loqer_config["v_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False, q_config=loqer_config["v_proj"])
+        # self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=False)
+        # fmt: off
         self.o_proj = get_quantized_layer_cls("linear", q_config=loqer_config["o_proj"])(self.num_heads * self.head_dim, self.hidden_size, bias=False, q_config=loqer_config["o_proj"])
+        self.qkv_proj = get_quantized_layer_cls("linear", q_config=loqer_config["qkv_proj"])(self.hidden_size, op_size, bias=False, q_config=loqer_config["qkv_proj"])
         self.loqer_config = loqer_config
         # fmt: on
+        self._init_rope()
 
-        self.rotary_emb = MistralRotaryEmbedding(
-            self.head_dim,
-            max_position_embeddings=self.max_position_embeddings,
-            base=self.rope_theta,
-        )
+    def _init_rope(self):
+        if self.rope_scaling is None:
+            self.rotary_emb = Phi3RotaryEmbedding(
+                self.head_dim,
+                max_position_embeddings=self.max_position_embeddings,
+                base=self.rope_theta,
+            )
+        else:
+            scaling_type = self.config.rope_scaling["type"]
+            if scaling_type == "longrope":
+                self.rotary_emb = Phi3LongRoPEScaledRotaryEmbedding(self.head_dim, self.config)
+            else:
+                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
 
     def forward(
         self,
@@ -105,43 +114,59 @@ class MistralQuantizedAttention(nn.Module):
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        logger.warning_once("You are not running the flash-attention implementation, expect numerical differences.")
+
         bsz, q_len, _ = hidden_states.size()
 
-        query_states = self.q_proj(hidden_states)
-        key_states = self.k_proj(hidden_states)
-        value_states = self.v_proj(hidden_states)
+        qkv = self.qkv_proj(hidden_states)
+        query_pos = self.num_heads * self.head_dim
+        query_states = qkv[..., :query_pos]
+        key_states = qkv[..., query_pos : query_pos + self.num_key_value_heads * self.head_dim]
+        value_states = qkv[..., query_pos + self.num_key_value_heads * self.head_dim :]
 
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        cos, sin = self.rotary_emb(value_states, position_ids)
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        kv_seq_len = key_states.shape[-2]
+        if past_key_value is not None:
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+        cos, sin = self.rotary_emb(value_states, position_ids, seq_len=kv_seq_len)
+
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
+        # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
         # *: matmul_0
-        kv_seq_len = key_states.shape[-2]
         # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        # fmt: off
+        kv_seq_len = key_states.size(2)
         query_states = query_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
         key_states = key_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
         attn_weights = get_quantized_func("matmul", q_config=self.loqer_config["matmul_0"])(
             query_states, key_states.transpose(1, 2), q_config=self.loqer_config["matmul_0"]
         ) / math.sqrt(self.head_dim)
         attn_weights = attn_weights.reshape(bsz, self.num_heads, q_len, kv_seq_len)
+        # fmt: on
 
-        if attention_mask is not None:  # no matter the length, we just slice it
+        if attention_mask is not None:
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-            attn_weights = attn_weights + causal_mask
+            attn_weights += causal_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(value_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         # *: matmul_1
         # attn_output = torch.matmul(attn_weights, value_states)
@@ -159,8 +184,8 @@ class MistralQuantizedAttention(nn.Module):
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-        attn_output = attn_output.view(bsz, q_len, -1)
         attn_output = self.o_proj(attn_output)
 
         if not output_attentions:
@@ -169,30 +194,31 @@ class MistralQuantizedAttention(nn.Module):
         return attn_output, attn_weights, past_key_value
 
 
-MISTRAL_ATTENTION_CLASSES = {
-    "eager": MistralQuantizedAttention,
-}
+PHI3_ATTENTION_CLASSES = {"eager": Phi3QuantizedAttention}
 
 
-class MistralQuantizedDecoderLayer(nn.Module):
-    def __init__(self, config: MistralConfig, layer_idx: int, loqer_config: dict):
+class Phi3QuantizedDecoderLayer(nn.Module):
+    def __init__(self, config: Phi3Config, layer_idx: int, loqer_config: dict):
         super().__init__()
-        self.hidden_size = config.hidden_size
 
-        self.self_attn = MISTRAL_ATTENTION_CLASSES[config._attn_implementation](
-            config=config, layer_idx=layer_idx, loqer_config=loqer_config["self_attn"]
+        self.config = config
+        self.self_attn = PHI3_ATTENTION_CLASSES[config._attn_implementation](
+            config, layer_idx=layer_idx, loqer_config=loqer_config["self_attn"]
         )
 
-        self.mlp = MistralQuantizedMLP(config, loqer_config=loqer_config["mlp"])
-        self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = Phi3QuantizedMLP(config, loqer_config=loqer_config["mlp"])
+        self.input_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+        self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
+        self.resid_mlp_dropout = nn.Dropout(config.resid_pdrop)
+        self.post_attention_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
@@ -200,10 +226,13 @@ class MistralQuantizedDecoderLayer(nn.Module):
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
-            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*):
-                attention mask of size `(batch_size, sequence_length)` if flash attention is used or `(batch_size, 1,
-                query_sequence_length, key_sequence_length)` if default attention is used.
+            hidden_states (`torch.FloatTensor`):
+                input to the layer of shape `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`, *optional*): attention mask of size
+                `(batch, 1, tgt_len, src_len)` where padding elements are indicated by very large negative values.
+            position_ids (`torch.LongTensor` of shape `({0})`, *optional*):
+                Indices of positions of each input sequence tokens in the position embeddings. Selected in the range
+                `[0, config.n_positions - 1]`. [What are position IDs?](../glossary#position-ids)
             output_attentions (`bool`, *optional*):
                 Whether or not to return the attentions tensors of all attention layers. See `attentions` under
                 returned tensors for more detail.
@@ -217,12 +246,13 @@ class MistralQuantizedDecoderLayer(nn.Module):
                 Arbitrary kwargs to be ignored, used for FSDP and other methods that injects code
                 into the model
         """
+
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        attn_outputs, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -230,15 +260,14 @@ class MistralQuantizedDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
             cache_position=cache_position,
-            **kwargs,
         )
-        hidden_states = residual + hidden_states
 
-        # Fully Connected
+        hidden_states = residual + self.resid_attn_dropout(attn_outputs)
+
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
+        hidden_states = residual + self.resid_mlp_dropout(hidden_states)
 
         outputs = (hidden_states,)
 
@@ -251,13 +280,13 @@ class MistralQuantizedDecoderLayer(nn.Module):
         return outputs
 
 
-def build_loqer_config_mistral(model: MistralForCausalLM, loqer_config: dict):
+def build_loqer_config_phi3(model: Phi3ForCausalLM, loqer_config: dict):
     parsed_config = {}
 
-    decoder_layer_i: MistralDecoderLayer
+    decoder_layer_i: Phi3DecoderLayer
     for i, decoder_layer_i in enumerate(model.model.layers):
         parsed_config[f"model_layer_{i}"] = {"self_attn": {}, "mlp": {}}
-        for fc_short_name in ["k_proj", "q_proj", "v_proj", "o_proj"]:
+        for fc_short_name in ["qkv_proj", "o_proj"]:
             fc_name = get_layer_name(model, getattr(decoder_layer_i.self_attn, fc_short_name))
             matched_entry = find_matched_pattern(fc_name, loqer_config.keys())
             assert matched_entry is not None, f"Cannot find matched entry for {fc_name}"
@@ -271,7 +300,7 @@ def build_loqer_config_mistral(model: MistralForCausalLM, loqer_config: dict):
             if isinstance(loqer_config[matched_entry], str):
                 matched_entry = loqer_config[matched_entry]
             parsed_config[f"model_layer_{i}"]["self_attn"][matmul_short_name] = deepcopy(loqer_config[matched_entry])
-        for fc_short_name in ["gate_proj", "up_proj", "down_proj"]:
+        for fc_short_name in ["gate_up_proj", "down_proj"]:
             fc_name = get_layer_name(model, getattr(decoder_layer_i.mlp, fc_short_name))
             matched_entry = find_matched_pattern(fc_name, loqer_config.keys())
             assert matched_entry is not None, f"Cannot find matched entry for {fc_name}"
@@ -282,18 +311,15 @@ def build_loqer_config_mistral(model: MistralForCausalLM, loqer_config: dict):
     return parsed_config
 
 
-def quantize_mistral_model(
-    model: MistralForCausalLM | MistralForSequenceClassification,
-    loqer_config: dict,
-):
-    loqer_config = build_loqer_config_mistral(model, loqer_config)
+def quantize_phi3_model(model: Phi3ForCausalLM, loqer_config: dict):
+    loqer_config = build_loqer_config_phi3(model, loqer_config)
 
     for layer_id, ori_decoder_layer in enumerate(model.model.layers):
         layer_entry = f"model_layer_{layer_id}"
-        layer_q_config = loqer_config[layer_entry]
+        layer_loqer_config = loqer_config[layer_entry]
 
         # replace the decoder layer with quantized decoder layer
-        new_decoder_layer = MistralQuantizedDecoderLayer(model.config, layer_id, layer_q_config)
+        new_decoder_layer = Phi3QuantizedDecoderLayer(model.config, layer_id, layer_loqer_config)
         ori_rope = ori_decoder_layer.self_attn.rotary_emb
         new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).dtype)
         new_decoder_layer.self_attn.rotary_emb = ori_rope
@@ -303,12 +329,12 @@ def quantize_mistral_model(
         # remove the original layer
         del ori_decoder_layer
 
-    model._no_split_modules = ["MistralDecoderLayer", "MistralQuantizedDecoderLayer"]
+    model._no_split_modules = ["LlamaDecoderLayer", "LlamaQuantizedDecoderLayer"]
 
     return model
 
 
-def find_layers_to_register_scale_hook_mistral(model: MistralForCausalLM) -> list[dict[str, str | list[str]]]:
+def find_layers_to_register_scale_hook_phi3(model: Phi3ForCausalLM) -> list[dict[str, str | list[str]]]:
     """
     return a list of dict, each dict contains the following keys:
 
@@ -324,22 +350,18 @@ def find_layers_to_register_scale_hook_mistral(model: MistralForCausalLM) -> lis
     layers_to_register = []
 
     for decoder_layer in model.model.layers:
-        k_name = get_layer_name(model, decoder_layer.self_attn.k_proj)
-        q_name = get_layer_name(model, decoder_layer.self_attn.q_proj)
-        v_name = get_layer_name(model, decoder_layer.self_attn.v_proj)
+        qkv_name = get_layer_name(model, decoder_layer.self_attn.qkv_proj)
         layers_to_register.append(
-            dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]),
+            dict(target_layer=qkv_name, layers_sharing_scale=[]),
         )
-
         o_name = get_layer_name(model, decoder_layer.self_attn.o_proj)
         layers_to_register.append(
             dict(target_layer=o_name, layers_sharing_scale=[]),
         )
 
-        gate_name = get_layer_name(model, decoder_layer.mlp.gate_proj)
-        up_name = get_layer_name(model, decoder_layer.mlp.up_proj)
+        gate_up_name = get_layer_name(model, decoder_layer.mlp.gate_up_proj)
         layers_to_register.append(
-            dict(target_layer=gate_name, layers_sharing_scale=[up_name]),
+            dict(target_layer=gate_up_name, layers_sharing_scale=[]),
         )
 
         down_name = get_layer_name(model, decoder_layer.mlp.down_proj)
@@ -350,7 +372,7 @@ def find_layers_to_register_scale_hook_mistral(model: MistralForCausalLM) -> lis
     return layers_to_register
 
 
-def find_layers_to_approximate_mistral(model: MistralForCausalLM):
+def find_layers_to_approximate_phi3(model: Phi3ForCausalLM):
     layers_to_approximate = []
 
     for layer_name, layer in model.named_modules():

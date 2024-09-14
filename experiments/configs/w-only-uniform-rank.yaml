@@ -1,4 +1,4 @@
-model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+model_name: TinyLlama/TinyLlama_v1.1
 # Note that the dtype for statistic profiling is hard-coded float32,
 # since the SVD of float16 is not supported by pytorch
 loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
@@ -18,32 +18,19 @@ perplexity_eval_batch_size: 4
 perplexity_eval_set: "wikitext2"
 perplexity_max_seq_length: 2048
 # lm-eval-harness
-lm_eval_tasks:
-  [
-    "arc_easy",
-    "lambada_openai",
-    "piqa",
-    "winogrande",
-    "arc_challenge",
-    "boolq",
-    "openbookqa",
-  ]
+lm_eval_tasks: ["loqer_benchmark_classic", "loqer_benchmark_hard"]
 lm_eval_batch_size: 4
 lm_eval_num_fewshot: 0
+max_position_embeddings: null
 
 # LoQER
 disable_loqer: false # if true, quantization only without A & B
-loqer_scaling_mode: rxx # "rxx" or "diagonal"
+loqer_scaling_mode: diag # "rxx" or "diagonal"
 loqer_sqrtm_implementation: blocked # "blocked" or "iterative"
 loqer_sqrtm_num_iters: 100
-loqer_scaling_mode_map:
-  # llama/mistral
-  'model\.layers\.[0-9]+\.self_attn\.(k|q|v)_proj': rxx
-  'model\.layers\.[0-9]+\.self_attn\.o_proj': diag
-  'model\.layers\.[0-9]+\.mlp\.(gate|up)_proj': rxx
-  'model\.layers\.[0-9]+\.mlp\.down_proj': diag
+loqer_scaling_mode_map: null
 loqer_config:
-  # llama/mistral
+  # llama/mistral/phi3 (partially)
   'model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj': default-1
   'model\.layers\.[0-9]+\.mlp\.(gate|down|up)_proj': default-1
   'model\.layers\.[0-9]+\.self_attn\.(matmul_0|matmul_1)': default-matmul
@@ -51,6 +38,9 @@ loqer_config:
   'model\.decoder\.layers\.[0-9]+\.self_attn\.(k|q|v|out)_proj': default-1
   'model\.decoder\.layers\.[0-9]+\.(fc1|fc2)': default-1
   'model\.decoder\.layers\.[0-9]+\.self_attn\.(bmm_0|bmm_1)': default-matmul
+  # phi3
+  'model\.layers\.[0-9]+\.self_attn\.qkv_proj': default-1
+  'model\.layers\.[0-9]+\.mlp\.gate_up_proj': default-1
 
   default-1:
     rank: 32

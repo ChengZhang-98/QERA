@@ -8,8 +8,6 @@ from torch import nn
 from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
-    LlamaLinearScalingRotaryEmbedding,
-    LlamaDynamicNTKScalingRotaryEmbedding,
     apply_rotary_pos_emb,
     ACT2FN,
     LlamaConfig,
@@ -53,10 +51,16 @@ class LlamaQuantizedMLP(nn.Module):
 class LlamaQuantizedAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig, layer_idx: Optional[int], loqer_config: dict):
+    def __init__(self, config: LlamaConfig, layer_idx: int, loqer_config: dict):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
+        if layer_idx is None:
+            logger.warning_once(
+                f"Instantiating {self.__class__.__name__} without passing a `layer_idx` is not recommended and will "
+                "lead to errors during the forward call if caching is used. Please make sure to provide a `layer_idx` "
+                "when creating this class."
+            )
 
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
@@ -86,34 +90,8 @@ class LlamaQuantizedAttention(nn.Module):
         self.loqer_config = loqer_config
         # fmt: on
 
-        self._init_rope()
-
-    def _init_rope(self):
-        if self.config.rope_scaling is None:
-            self.rotary_emb = LlamaRotaryEmbedding(
-                self.head_dim,
-                max_position_embeddings=self.max_position_embeddings,
-                base=self.rope_theta,
-            )
-        else:
-            scaling_type = self.config.rope_scaling["type"]
-            scaling_factor = self.config.rope_scaling["factor"]
-            if scaling_type == "linear":
-                self.rotary_emb = LlamaLinearScalingRotaryEmbedding(
-                    self.head_dim,
-                    max_position_embeddings=self.max_position_embeddings,
-                    scaling_factor=scaling_factor,
-                    base=self.rope_theta,
-                )
-            elif scaling_type == "dynamic":
-                self.rotary_emb = LlamaDynamicNTKScalingRotaryEmbedding(
-                    self.head_dim,
-                    max_position_embeddings=self.max_position_embeddings,
-                    scaling_factor=scaling_factor,
-                    base=self.rope_theta,
-                )
-            else:
-                raise ValueError(f"Unknown RoPE scaling type {scaling_type}")
+        # TODO (joao): remove in v4.45 (RoPE is computed in the model, not in the decoder layers)
+        self.rotary_emb = LlamaRotaryEmbedding(config=self.config)
 
     def forward(
         self,
@@ -124,13 +102,13 @@ class LlamaQuantizedAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.45
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
             raise NotImplementedError("Pretraining with TP > 1 is not supported yet.")
-
         else:
             query_states = self.q_proj(hidden_states)
             key_states = self.k_proj(hidden_states)
@@ -140,8 +118,16 @@ class LlamaQuantizedAttention(nn.Module):
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
-        past_key_value = getattr(self, "past_key_value", past_key_value)
-        cos, sin = self.rotary_emb(value_states, position_ids)
+        if position_embeddings is None:
+            logger.warning_once(
+                "The attention layers in this model are transitioning from computing the RoPE embeddings internally "
+                "through `position_ids` (2D tensor with the indexes of the tokens), to using externally computed "
+                "`position_embeddings` (Tuple of tensors, containing cos and sin). In v4.45 `position_ids` will be "
+                "removed and `position_embeddings` will be mandatory."
+            )
+            cos, sin = self.rotary_emb(value_states, position_ids)
+        else:
+            cos, sin = position_embeddings
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
         if past_key_value is not None:
@@ -152,15 +138,16 @@ class LlamaQuantizedAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # *: matmul
+        # *: matmul_0
         # attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
         # fmt: off
+        kv_seq_len = key_states.size(2)
         query_states = query_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
-        key_states = key_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
+        key_states = key_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
         attn_weights = get_quantized_func("matmul", q_config=self.loqer_config["matmul_0"])(
             query_states, key_states.transpose(1, 2), q_config=self.loqer_config["matmul_0"]
         ) / math.sqrt(self.head_dim)
-        attn_weights = attn_weights.reshape(bsz, self.num_heads, q_len, q_len)
+        attn_weights = attn_weights.reshape(bsz, self.num_heads, q_len, kv_seq_len)
         # fmt: on
 
         if attention_mask is not None:  # no matter the length, we just slice it
@@ -170,11 +157,11 @@ class LlamaQuantizedAttention(nn.Module):
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-        # *: matmul
+        # *: matmul_1
         # attn_output = torch.matmul(attn_weights, value_states)
-        attn_weights = attn_weights.reshape(bsz * self.num_heads, q_len, q_len)
-        value_states = value_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
-        attn_output = get_quantized_func("matmul", q_config=self.loqer_config["matmul_0"])(
+        attn_weights = attn_weights.reshape(bsz * self.num_heads, q_len, kv_seq_len)
+        value_states = value_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
+        attn_output = get_quantized_func("matmul", q_config=self.loqer_config["matmul_1"])(
             attn_weights, value_states, q_config=self.loqer_config["matmul_1"]
         )
         attn_output = attn_output.reshape(bsz, self.num_heads, q_len, self.head_dim)
@@ -187,7 +174,7 @@ class LlamaQuantizedAttention(nn.Module):
 
         attn_output = attn_output.transpose(1, 2).contiguous()
 
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        attn_output = attn_output.reshape(bsz, q_len, -1)
 
         if self.config.pretraining_tp > 1:
             raise NotImplementedError("Pretraining with TP > 1 is not supported yet.")
@@ -210,7 +197,6 @@ class LlamaQuantizedDecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        assert config._attn_implementation == "eager", "Only eager attention is supported."
         self.self_attn = LLAMA_ATTENTION_CLASSES[config._attn_implementation](
             config=config, layer_idx=layer_idx, loqer_config=loqer_config["self_attn"]
         )
@@ -224,10 +210,11 @@ class LlamaQuantizedDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_value: Optional[Cache] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.45
         **kwargs,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
@@ -243,12 +230,15 @@ class LlamaQuantizedDecoderLayer(nn.Module):
                 If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+            cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+                Indices depicting the position of the input sequence tokens in the sequence
+            position_embeddings (`Tuple[torch.FloatTensor, torch.FloatTensor]`, *optional*):
+                Tuple containing the cosine and sine positional embeddings of shape `(batch_size, seq_len, head_dim)`,
+                with `head_dim` being the embedding dimension of each attention head.
+            kwargs (`dict`, *optional*):
+                Arbitrary kwargs to be ignored, used for FSDP and other methods that injects code
+                into the model
         """
-        if "padding_mask" in kwargs:
-            logger.warning(
-                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
-            )
-
         residual = hidden_states
 
         hidden_states = self.input_layernorm(hidden_states)
@@ -262,6 +252,7 @@ class LlamaQuantizedDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
             cache_position=cache_position,
+            position_embeddings=position_embeddings,
             **kwargs,
         )
         hidden_states = residual + hidden_states
@@ -359,12 +350,6 @@ def find_layers_to_register_scale_hook_llama(model: LlamaForCausalLM) -> list[di
         layers_to_register.append(
             dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]),
         )
-
-        # v_name = get_layer_name(model, decoder_layer.self_attn.v_proj)
-        # layers_to_register.append(
-        # dict(target_layer=v_name, layers_sharing_scale=[]),
-        # )
-
         o_name = get_layer_name(model, decoder_layer.self_attn.o_proj)
         layers_to_register.append(
             dict(target_layer=o_name, layers_sharing_scale=[]),

@@ -1,5 +1,5 @@
 torch==2.3.0
-transformers==4.41.1
+transformers==4.44.2
 colorlog
 wandb
 modin[ray]
@@ -13,11 +13,11 @@ nvitop
 sentencepiece
 evaluate
 # lm-eval-harness
-einops
+# einops
 jsonlines
 numexpr
 openai>=0.6.4
-omegaconf>=2.2
+# omegaconf>=2.2
 peft>=0.2.0
 pybind11>=2.6.2
 pycountry
@@ -32,6 +32,10 @@ bitsandbytes==0.43.2
 dill
 word2number
 more_itertools
+langdetect
+immutabledict
+antlr4-python3-runtime==4.11
+sympy>=1.12
 # plot
 matplotlib
 seaborn

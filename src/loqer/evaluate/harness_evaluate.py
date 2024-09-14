@@ -1,9 +1,14 @@
 from typing import List, Optional, Union
+import torch
 from lm_eval.models.huggingface import HFLM
 from lm_eval.evaluator import simple_evaluate as _simple_evaluate  # as evaluate_harness_downstream
 from lm_eval.utils import make_table as harness_make_table
+from lm_eval.tasks import TaskManager
+
+from ..utils import LOQER_SRC_DIR
 
 
+@torch.no_grad()
 def evaluate_harness_downstream(
     model,
     tasks: Optional[List[Union[str, dict, object]]] = None,
@@ -35,6 +40,13 @@ def evaluate_harness_downstream(
 ):
     model.eval()
     model = HFLM(model)
+    if task_manager is None:
+        LOQER_HARNESS_TASK_DIR = LOQER_SRC_DIR.parent.joinpath("loqer_harness_tasks")
+        task_manager = TaskManager(
+            verbosity=verbosity,
+            include_path=LOQER_HARNESS_TASK_DIR.absolute().as_posix(),
+            include_defaults=True,
+        )
     results = _simple_evaluate(
         model,
         tasks=tasks,
@@ -64,8 +76,13 @@ def evaluate_harness_downstream(
         torch_random_seed=torch_random_seed,
         fewshot_random_seed=fewshot_random_seed,
     )
+    table_view: str = harness_make_table(results)
+    if "groups" in results:
+        group_table_view = harness_make_table(results, "groups")
+
     _ = results.pop("samples")
     _ = results.pop("pretty_env_info")
     if "config" in results and "model_dtype" in results["config"]:
         results["config"]["model_dtype"] = str(results["config"]["model_dtype"])
+    results["table_view"] = table_view
     return results

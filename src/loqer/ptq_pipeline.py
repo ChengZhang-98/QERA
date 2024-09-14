@@ -82,7 +82,7 @@ def pipeline_loqer():
         "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=None
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default=None
     )
     parser.add_argument(
         "--disable-loqer", dest="disable_loqer", action="store_true", help="Disable Loqer", default=None
@@ -113,6 +113,13 @@ def pipeline_loqer():
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
     parser.add_argument("--overwrite-output-dir", "-ow", dest="overwrite_output_dir", action="store_true", default=None)
+    parser.add_argument(
+        "--max-position-embeddings",
+        dest="max_position_embeddings",
+        type=int,
+        default=None,
+        help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
+    )
 
     args = parser.parse_args()
     args = vars(args)
@@ -145,6 +152,9 @@ def pipeline_loqer():
     lm_eval_tasks = config["lm_eval_tasks"]
     lm_eval_num_fewshot = config["lm_eval_num_fewshot"]
     lm_eval_batch_size = config["lm_eval_batch_size"]
+    if isinstance(lm_eval_batch_size, str) and not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
+    max_position_embeddings = config["max_position_embeddings"]
 
     disable_loqer = config["disable_loqer"]
     loqer_scaling_mode = config["loqer_scaling_mode"]
@@ -186,15 +196,18 @@ def pipeline_loqer():
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+    other_model_kwargs = {}
+    if max_position_embeddings is not None:
+        other_model_kwargs["max_position_embeddings"] = max_position_embeddings
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager", **other_model_kwargs
     )
     model.eval()
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    device_map = create_device_map(model, device_map=device_map)
-    logger.info(f"Device map: {device_map}")
-    model = dispatch_model(model, device_map)
+    device_map_ = create_device_map(model, device_map=device_map)
+    logger.info(f"Device map: {device_map_}")
+    model = dispatch_model(model, device_map_)
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     if not disable_loqer and AB_dict is None:
@@ -248,6 +261,7 @@ def pipeline_loqer():
         else:
             scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
 
+        del profiler_factory
         share_scales(scale_dict, layers_to_register_and_share)
         logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
@@ -260,7 +274,7 @@ def pipeline_loqer():
             logger.info("🚀 Loqer is enabled. Computing A & B...")
             AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
             del scale_dict
-            attach_AB(model, layers_to_approximate, AB_dict)
+            # attach_AB(model, layers_to_approximate, AB_dict)
             mse_df_emoji = mse_df.copy()
             mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
             logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
@@ -268,10 +282,21 @@ def pipeline_loqer():
             logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
             mse_df = None
-            attach_AB(model, layers_to_approximate, AB_dict)
+            # attach_AB(model, layers_to_approximate, AB_dict)
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
-    # logger.info(f"Model after approximation: \n{model}")
+
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=eval_dtype, _attn_implementation="eager", **other_model_kwargs
+    )
+    if hasattr(model, "tie_weights"):
+        model.tie_weights()
+    model.eval()
+    quantize_model(model, loqer_config)
+    if not disable_loqer:
+        attach_AB(model, layers_to_approximate, AB_dict)
+    device_map_ = create_device_map(model, device_map=device_map)
+    model = dispatch_model(model, device_map_)
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -290,8 +315,6 @@ def pipeline_loqer():
             num_workers=num_workers,
             collate_fn=data_collator,
         )
-        model = model.to(eval_dtype)
-        model = dispatch_model(model, device_map)
         ppl_results = evaluate_perplexity(
             model=model,
             eval_dataloader=eval_dataloader,
@@ -308,8 +331,6 @@ def pipeline_loqer():
 
     if not disable_lm_eval:
         logger.info("🚀 Evaluating lm-eval downstream tasks...")
-        model = model.to(eval_dtype)
-        model = dispatch_model(model, device_map)
         lm_eval_results = evaluate_harness_downstream(
             model,
             tasks=lm_eval_tasks,
@@ -317,7 +338,7 @@ def pipeline_loqer():
             use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+        logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -350,7 +371,7 @@ def pipeline_loqer():
 def pipeline_fp16_bf16_fp32():
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
-    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
+    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="bfloat16")
     parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default="auto-balanced")
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
@@ -381,24 +402,23 @@ def pipeline_fp16_bf16_fp32():
         type=str,
         nargs="+",
         help="LM eval tasks",
-        default=[
-            "arc_easy",
-            "lambada_openai",
-            "piqa",
-            "winogrande",
-            "arc_challenge",
-            "boolq",
-            "openbookqa",
-        ],
+        default=["loqer_benchmark_classic", "loqer_benchmark_hard"],
     )
     parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=0
+        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default="auto"
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
+    parser.add_argument(
+        "--max-position-embeddings",
+        dest="max_position_embeddings",
+        type=int,
+        default=None,
+        help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
+    )
 
     args = parser.parse_args()
 
@@ -415,6 +435,8 @@ def pipeline_fp16_bf16_fp32():
     lm_eval_tasks = args.lm_eval_tasks
     lm_eval_num_fewshot = args.lm_eval_num_fewshot
     lm_eval_batch_size = args.lm_eval_batch_size
+    if not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
     disable_perplexity_eval = args.disable_perplexity_eval
     disable_lm_eval = args.disable_lm_eval
 
@@ -424,7 +446,12 @@ def pipeline_fp16_bf16_fp32():
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+    other_model_kwargs = {}
+    if args.max_position_embeddings is not None:
+        other_model_kwargs["max_position_embeddings"] = args.max_position_embeddings
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=dtype, _attn_implementation="eager", **other_model_kwargs
+    )
     model.eval()
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
     model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
@@ -467,7 +494,7 @@ def pipeline_fp16_bf16_fp32():
             use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+        logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -489,12 +516,24 @@ def pipeline_fp16_bf16_fp32():
 
 
 def pipeline_q_baseline():
-    from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
-    from auto_gptq import exllama_set_max_input_length
+    from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig, HqqConfig
+
+    gptq_available = False
+    try:
+        from auto_gptq import exllama_set_max_input_length
+
+        gptq_available = True
+    except ImportError:
+        pass
 
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
-    parser.add_argument("--load-in-4bit", dest="load_in_4bit", action="store_true", help="Load in 4-bit model")
+    parser.add_argument(
+        "q_method",
+        type=str,
+        help="Quantization method",
+        choices=["bnb-4bit", "gptq", "awq", "bnb-8bit", "hqq-4bit", "hqq-3bit", "hqq-2bit"],
+    )
     parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
@@ -525,21 +564,26 @@ def pipeline_q_baseline():
         type=str,
         nargs="+",
         help="LM eval tasks",
-        default=[
-            "arc_easy",
-            "lambada_openai",
-            "piqa",
-            "winogrande",
-            "arc_challenge",
-            "boolq",
-            "openbookqa",
-        ],
+        default=["loqer_benchmark_classic", "loqer_benchmark_hard"],
     )
     parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=0
+        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default="auto"
+    )
+    parser.add_argument(
+        "--max-position-embeddings",
+        dest="max_position_embeddings",
+        type=int,
+        default=None,
+        help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
+    )
+    parser.add_argument(
+        "--hqq-group-size",
+        dest="hqq_group_size",
+        type=int,
+        default=64,
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
@@ -549,7 +593,7 @@ def pipeline_q_baseline():
     logger.info(f"Arguments: \n{pformat(vars(args), indent=4)}")
 
     model_name = args.model_name
-    load_in_4bit = args.load_in_4bit
+    q_method = args.q_method
     dtype = getattr(torch, args.dtype)
     num_workers = args.num_workers
     output_dir = Path(args.output_dir) if args.output_dir is not None else None
@@ -559,35 +603,71 @@ def pipeline_q_baseline():
     lm_eval_tasks = args.lm_eval_tasks
     lm_eval_num_fewshot = args.lm_eval_num_fewshot
     lm_eval_batch_size = args.lm_eval_batch_size
+    if not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
     disable_perplexity_eval = args.disable_perplexity_eval
     disable_lm_eval = args.disable_lm_eval
+
+    hqq_group_size = args.hqq_group_size
+
+    other_model_kwargs = {}
+    if args.max_position_embeddings is not None:
+        other_model_kwargs["max_position_embeddings"] = args.max_position_embeddings
 
     # check output directory
     if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # Load model and tokenizer
-    if load_in_4bit:
-        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=dtype, quantization_config=quantization_config
+    if q_method in ["bnb-4bit", "bnb-8bit"]:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=q_method == "bnb-4bit",
+            load_in_8bit=q_method == "bnb-8bit",
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
         )
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, quantization_config=quantization_config, **other_model_kwargs
+        )
+    elif q_method == "hqq-4bit":
+        hqq_config = HqqConfig(nbits=4, group_size=hqq_group_size, quant_zero=False, quant_scale=False, axis=0)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cuda",
+            quantization_config=hqq_config,
+            **other_model_kwargs,
+        )
+    elif q_method == "hqq-3bit":
+        hqq_config = HqqConfig(nbits=3, group_size=hqq_group_size, quant_zero=False, quant_scale=False, axis=0)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cuda",
+            quantization_config=hqq_config,
+            **other_model_kwargs,
+        )
+    elif q_method == "hqq-2bit":
+        hqq_config = HqqConfig(nbits=2, group_size=hqq_group_size, quant_zero=False, quant_scale=False, axis=0)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cuda",
+            quantization_config=hqq_config,
+            **other_model_kwargs,
+        )
+    elif q_method == "awq":
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, device_map="cuda", **other_model_kwargs
+        )
+    elif q_method == "gptq":
+        assert gptq_available, "auto-gptq is not installed"
+        model = exllama_set_max_input_length(model, 8192)
     else:
-        model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, device_map={"": 0})
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, device_map="cuda", **other_model_kwargs
+        )
     model.eval()
-
-    if load_in_4bit:
-        q_method = "bnb-4bit"
-    else:
-        if isinstance(model.config.quantization_config, GPTQConfig):
-            q_method = "gptq"
-            model = exllama_set_max_input_length(model, 8192)
-        elif isinstance(model.config.quantization_config, AwqConfig):
-            q_method = "awq"
-        elif isinstance(model.config.quantization_config, dict):
-            q_method = model.config.quantization_config["quant_method"]
-        else:
-            raise ValueError(f"Unknown quantization method: {model.config.quantization_config}")
 
     logger.info(f"🔊 Quantization method: {q_method}")
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -630,7 +710,7 @@ def pipeline_q_baseline():
             use_cache=None,
             batch_size=lm_eval_batch_size,
         )
-        logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+        logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
     if output_dir is not None:
         logger.info(f"🚀 Saving results to {output_dir}")
@@ -698,7 +778,6 @@ def pipeline_loqer_chunked():
     parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default=None)
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=None)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
-    # parser.add_argument("--AB-dict", dest="AB_dict", type=str, help="AB dict", default=None)
     parser.add_argument("--calibration-set", dest="calibration_set", type=str, help="Calibration set", default=None)
     parser.add_argument(
         "--num-calibration-samples",
@@ -735,7 +814,7 @@ def pipeline_loqer_chunked():
         "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=None
+        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=str, help="LM eval batch size", default=None
     )
     parser.add_argument(
         "--disable-loqer", dest="disable_loqer", action="store_true", help="Disable Loqer", default=None
@@ -765,6 +844,7 @@ def pipeline_loqer_chunked():
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
+    parser.add_argument("--max-position-embeddings", dest="max_position_embeddings", type=int, default=None)
     parser.add_argument("--layers-per-chunk", dest="layers_per_chunk", type=int, help="Layers per chunk", default=None)
     parser.add_argument("--chunk-id", dest="chunk_id", type=int, help="Chunk ID", default=None)
 
@@ -799,6 +879,8 @@ def pipeline_loqer_chunked():
     lm_eval_tasks = config["lm_eval_tasks"]
     lm_eval_num_fewshot = config["lm_eval_num_fewshot"]
     lm_eval_batch_size = config["lm_eval_batch_size"]
+    if isinstance(lm_eval_batch_size, str) and not "auto" in lm_eval_batch_size:
+        lm_eval_batch_size = int(lm_eval_batch_size)
 
     disable_loqer = config["disable_loqer"]
     loqer_scaling_mode = config["loqer_scaling_mode"]
@@ -822,6 +904,9 @@ def pipeline_loqer_chunked():
     AB_dict_dir = output_dir.joinpath("AB_dict")
     missing_chunks = _verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None)
     assert not (len(missing_chunks) > 0 and chunk_id is None), f"Missing chunks: {missing_chunks}"
+    other_model_kwargs = {}
+    if config["max_position_embeddings"] is not None:
+        other_model_kwargs["max_position_embeddings"] = config["max_position_embeddings"]
 
     if len(missing_chunks) > 0:
         # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
@@ -846,8 +931,9 @@ def pipeline_loqer_chunked():
 
         # Load model and tokenizer
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
+
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager", **other_model_kwargs
         )
         model.eval()
         if hasattr(model, "tie_weights"):
@@ -949,7 +1035,7 @@ def pipeline_loqer_chunked():
         # Load model and tokenizer
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+            model_name, torch_dtype=eval_dtype, _attn_implementation="eager", **other_model_kwargs
         )
         model.eval()
         if hasattr(model, "tie_weights"):
@@ -989,7 +1075,6 @@ def pipeline_loqer_chunked():
                 num_workers=num_workers,
                 collate_fn=data_collator,
             )
-            model = model.to(eval_dtype)
             model = dispatch_model(model, device_map)
             mem_info = get_all_device_mem_info()
             logger.info(f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}")
@@ -1009,7 +1094,6 @@ def pipeline_loqer_chunked():
 
         if not disable_lm_eval:
             logger.info("🚀 Evaluating lm-eval downstream tasks...")
-            model = model.to(eval_dtype)
             model = dispatch_model(model, device_map)
             lm_eval_results = evaluate_harness_downstream(
                 model,
@@ -1018,7 +1102,7 @@ def pipeline_loqer_chunked():
                 use_cache=None,
                 batch_size=lm_eval_batch_size,
             )
-            logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+            logger.info(f"Downstream task results: \n{lm_eval_results['table_view']}")
 
         # save perplexity results
         if not disable_perplexity_eval:
