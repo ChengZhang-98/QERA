@@ -44,6 +44,7 @@ def adapt_and_save_clm_model(
     quant_bits: int,
     lora_rank: int,
     lora_alpha: float,
+    lora_dropout: float,
     lora_target_modules: list[str] | None,
     device_map: str,
     num_workers: int,
@@ -168,7 +169,7 @@ def adapt_and_save_clm_model(
         inference_mode=True,
         r=lora_rank,
         lora_alpha=lora_alpha,
-        lora_dropout=0.1,
+        lora_dropout=lora_dropout,
         target_modules=lora_target_modules_,
         init_lora_weights=True,
         modules_to_save=lora_modules_to_save,
@@ -536,6 +537,7 @@ def adapt_and_save_pipeline():
     parser.add_argument("--quant-bits", type=int, default=4, help="Default: 4", choices=[2, 3, 4])
     parser.add_argument("--lora-rank", type=int, default=64, help="Default: 64")
     parser.add_argument("--lora-alpha", type=float, default=128.0, help="Default: 128.0")
+    parser.add_argument("--lora-dropout", type=float, default=0.1, help="Default: 0.1")
     parser.add_argument(
         "--lora-target-modules",
         type=str,
@@ -575,6 +577,7 @@ def adapt_and_save_pipeline():
             quant_bits=args.quant_bits,
             lora_rank=args.lora_rank,
             lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
             lora_target_modules=args.lora_target_modules,
             lora_modules_to_save=args.lora_modules_to_save,
             device_map=args.device_map,

@@ -419,6 +419,13 @@ def pipeline_fp16_bf16_fp32():
         default=None,
         help="Llama-3-8.1 max position embeddings is too large for perplexity eval in harness",
     )
+    parser.add_argument(
+        "--attn-implementation",
+        dest="attn_implementation",
+        type=str,
+        default="eager",
+        choices=["eager", "flash_attention_2", "sdpa"],
+    )
 
     args = parser.parse_args()
 
@@ -439,6 +446,7 @@ def pipeline_fp16_bf16_fp32():
         lm_eval_batch_size = int(lm_eval_batch_size)
     disable_perplexity_eval = args.disable_perplexity_eval
     disable_lm_eval = args.disable_lm_eval
+    attn_implementation = args.attn_implementation
 
     # check output directory
     if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
@@ -450,7 +458,7 @@ def pipeline_fp16_bf16_fp32():
     if args.max_position_embeddings is not None:
         other_model_kwargs["max_position_embeddings"] = args.max_position_embeddings
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=dtype, _attn_implementation="eager", **other_model_kwargs
+        model_name, torch_dtype=dtype, _attn_implementation=attn_implementation, **other_model_kwargs
     )
     model.eval()
     data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
@@ -517,9 +525,11 @@ def pipeline_fp16_bf16_fp32():
 
 def pipeline_q_baseline():
     from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig, HqqConfig
+
     gptq_available = False
     try:
         from auto_gptq import exllama_set_max_input_length
+
         gptq_available = True
     except ImportError:
         pass
