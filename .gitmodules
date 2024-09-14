@@ -1,3 +1,6 @@
 [submodule "submodules/lm-evaluation-harness"]
 	path = submodules/lm-evaluation-harness
 	url = git@github.com:ChengZhang-98/lm-evaluation-harness.git
+[submodule "submodules/alpaca_eval"]
+	path = submodules/alpaca_eval
+	url = git@github.com:ChengZhang-98/alpaca_eval.git
