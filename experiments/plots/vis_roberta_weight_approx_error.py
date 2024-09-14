@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 import yaml
 import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch
+from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_color
 
 plot_palette("cz")
 plot_palette("ic")
+plot_palette("cbf")
 
 # %%
 

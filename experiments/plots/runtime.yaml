@@ -1,0 +1,40 @@
+Cheng98/TinyLlama_v1.1_diag:
+  calibration: 122.07024502754211
+  pure_inference (part of calibration): 110.7006151676178
+  sqrtm: 0.036464691162109375
+  svd: 114.09523868560791
+google/gemma-2-2b_diag:
+  calibration: 238.45239925384521
+  pure_inference (part of calibration): 195.16007566452026
+  sqrtm: 0.021640300750732422
+  svd: 287.5154161453247
+meta-llama/Llama-2-7b-hf_diag:
+  calibration: 495.30890417099
+  pure_inference (part of calibration): 505.82232427597046
+  sqrtm: 0.01987457275390625
+  svd: 1197.926025390625
+meta-llama/Llama-2-13b-hf_diag:
+  calibration: 885.988844871521
+  pure_inference (part of calibration): 913.8123788833618
+  sqrtm: 0.07917404174804688
+  svd: 2453.2716178894043
+Cheng98/TinyLlama_v1.1_rxx:
+  calibration: 652.5609645843506
+  pure_inference (part of calibration): 111.00052118301392
+  sqrtm: 1602.4746532440186
+  svd: 82.32134294509888
+google/gemma-2-2b_rxx:
+  calibration: 1458.0771751403809
+  pure_inference (part of calibration): 194.90723133087158
+  sqrtm: 5858.455852985382
+  svd: 239.7993712425232
+meta-llama/Llama-2-7b-hf_rxx:
+  calibration: 3159.7539417743683
+  pure_inference (part of calibration): 472.3012363910675
+  sqrtm: 12786.540725708008
+  svd: 943.7165603637695
+meta-llama/Llama-2-13b-hf_rxx:
+  calibration: 7190.371248722076
+  pure_inference (part of calibration): 868.8766407966614
+  sqrtm: 40417.62162208557
+  svd: 2182.253122329712

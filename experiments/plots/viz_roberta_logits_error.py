@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 import yaml
 import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch
+from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_color
 
 plot_palette("cz")
 plot_palette("ic")
+plot_palette("cbf")
 
 # %%
 
@@ -22,10 +23,11 @@ def visualize_roberta_logits_error(df):
 
     # plotting arguments
     set_default_style()
-    linewidth = 5.5  # inch
-    lineheight = 9  # inch
-    figsize = (linewidth * 0.8, linewidth * 0.8 * 0.75)
+    latex_linewidth = 5.5  # inch
+    latex_lineheight = 9  # inch
+    figsize = (latex_linewidth * 0.8, latex_linewidth * 0.8 * 0.75)
     markersize = 6
+    linewidth = 1.5
     FONT_SIZE_S = 10
     FONT_SIZE_M = 11
     FONT_SIZE_L = 12
@@ -48,8 +50,9 @@ def visualize_roberta_logits_error(df):
         df.loc[mask, "output_error"],
         "x--",
         markersize=markersize,
-        color=get_cz_color("cz_grey"),
+        color=get_color("cbf_grey"),
         label="QLoRA",
+        linewidth=linewidth,
     )
 
     # 4-bit, loftq (1-iter)
@@ -59,8 +62,9 @@ def visualize_roberta_logits_error(df):
         df.loc[mask, "output_error"],
         "^--",
         markersize=markersize,
-        color=get_cz_color("cz_darkred"),
+        color=get_color("cbf_darkred"),
         label="LoftQ (1-iter)",
+        linewidth=linewidth,
     )
 
     # 4-bit, loftq (3-iter)
@@ -70,8 +74,9 @@ def visualize_roberta_logits_error(df):
         df.loc[mask, "output_error"],
         "^--",
         markersize=markersize,
-        color=get_cz_color("cz_lightred"),
+        color=get_color("cbf_red"),
         label="LoftQ (3-iter)",
+        linewidth=linewidth,
     )
 
     # 4-bit, loftq (5-iter)
@@ -81,8 +86,9 @@ def visualize_roberta_logits_error(df):
         df.loc[mask, "output_error"],
         "^--",
         markersize=markersize,
-        color=get_cz_color("cz_lightorange"),
+        color=get_color("cz_orange"),
         label="LoftQ (5-iter)",
+        linewidth=linewidth,
     )
 
     # 4-bit, loqer
@@ -92,11 +98,12 @@ def visualize_roberta_logits_error(df):
         df.loc[mask, "output_error"],
         "o--",
         markersize=markersize,
-        color=get_cz_color("cz_green"),
+        color=get_color("cbf_green"),
         label="LoQER",
+        linewidth=linewidth,
     )
 
-    ax.set_ylabel(r"Output logits error")
+    ax.set_ylabel(r"Model output error")
     ax.set_xlabel(r"Rank")
     ax.set_xticks(np.arange(len(df.loc[mask, "rank"])))
     ax.set_xticklabels(df.loc[mask, "rank"].unique())
@@ -120,9 +127,10 @@ fig_output_e.savefig("roberta_output_error_vs_rank_4bit.pdf", bbox_inches="tight
 
 def visualize_roberta_loftq_output_errors_3bit(df):
     set_default_style()
-    linewidth = 5.5  # inch
+    latex_linewidth = 5.5  # inch
     lineheight = 9  # inch
-    figsize = (linewidth * 0.8, linewidth * 0.8 * 0.75)
+    linewidth = 1.5
+    figsize = (latex_linewidth * 0.8, latex_linewidth * 0.8 * 0.75)
     markersize = 6
     FONT_SIZE_S = 10
     FONT_SIZE_M = 11
@@ -177,34 +185,37 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         df.loc[mask_loftq_r4, "output_error"],
         "^--",
         markersize=markersize,
-        color=get_cz_color("cz_darkred"),
+        color=get_color("cbf_darkred"),
         label="LoftQ (k=4)",
+        linewidth=linewidth,
     )
     plt.plot(
         num_iters,
         df.loc[mask_loftq_r8, "output_error"],
         "^:",
         markersize=markersize,
-        color=get_cz_color("cz_lightred"),
+        color=get_color("cbf_red"),
         label="LoftQ (k=8)",
+        linewidth=linewidth,
     )
     plt.plot(
         num_iters,
         df.loc[mask_loftq_r16, "output_error"],
         "^-",
         markersize=markersize,
-        color=get_cz_color("cz_lightorange"),
+        color=get_color("cz_darkred"),
         label="LoftQ (k=16)",
+        linewidth=linewidth,
     )
 
     loqer_error_r4 = df.loc[mask_loqer_r4, "output_error"].values[0]
-    plt.axhline(loqer_error_r4, color=get_cz_color("cz_darkgreen"), linestyle="--", label="LoQER (k=4)")
+    plt.axhline(loqer_error_r4, color=get_color("cbf_darkgreen"), linestyle="--", label="LoQER (k=4)")
     loqer_error_r8 = df.loc[mask_loqer_r8, "output_error"].values[0]
-    plt.axhline(loqer_error_r8, color=get_cz_color("cz_green"), linestyle=":", label="LoQER (k=8)")
+    plt.axhline(loqer_error_r8, color=get_color("cbf_green"), linestyle=":", label="LoQER (k=8)")
     loqer_error_r16 = df.loc[mask_loqer_r16, "output_error"].values[0]
-    plt.axhline(loqer_error_r16, color=get_cz_color("cz_lightgreen"), linestyle="-", label="LoQER (k=16)")
+    plt.axhline(loqer_error_r16, color=get_color("cbf_lightgreen"), linestyle="-", label="LoQER (k=16)")
 
-    ax.set_ylabel(r"Output logits error")
+    ax.set_ylabel(r"Model output error")
     ax.set_xlabel(r"LoftQ num iterations")
     ax.set_xticks(num_iters)
 
