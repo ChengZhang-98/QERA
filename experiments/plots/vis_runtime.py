@@ -113,10 +113,24 @@ axes.bar(
     bottom=bottoms,
 )
 total = diag_calibration_times + diag_sqrtm_times + diag_svd_times
+
+
+def smart_time_format(t: float) -> str:
+    # seconds to hours and minutes
+    # return x.y hours, x.y minutes or x seconds
+
+    if t < 60:
+        return f"{t:.0f}s"
+    elif t < 3600:
+        return f"{t / 60:.1f}m"
+    else:
+        return f"{t / 3600:.1f}h"
+
+
 # annotate on top of the bars
 for i, (p, t) in enumerate(zip(num_params, total)):
     axes.annotate(
-        f"{t:.0f}",
+        f"{smart_time_format(t)}",
         (p, t),
         textcoords="offset points",
         xytext=(0, 5),
@@ -170,7 +184,7 @@ total = rxx_calibration_times + rxx_sqrtm_times + rxx_svd_times
 for i, (p, t) in enumerate(zip(num_params, total)):
     if i == 0:
         axes.annotate(
-            f"{t:.0f}",
+            f"{smart_time_format(t)}",
             (p + BAR_WIDTH, t * 1.6),
             textcoords="offset points",
             xytext=(0, 5),
@@ -180,7 +194,7 @@ for i, (p, t) in enumerate(zip(num_params, total)):
         )
     else:
         axes.annotate(
-            f"{t:.0f}",
+            f"{smart_time_format(t)}",
             (p + BAR_WIDTH, t),
             textcoords="offset points",
             xytext=(0, 5),
@@ -205,10 +219,10 @@ axes.set_xticks(num_params)
 axes.set_xticklabels(x_tick_labels)
 axes.set_xlim(0, 16)
 axes.set_ylim(0, 6e4)
-axes.set_yticks([0, 2e4, 4e4])
-axes.set_yticklabels(["0", "2e4", "4e4"])
+axes.set_yticks([0, 6 * 3600, 12 * 3600])
+axes.set_yticklabels(["0", "6h", "12h"])
 axes.set_xlabel("Model size")
-axes.set_ylabel("Time (s)")
+axes.set_ylabel("Time")
 # put legend on top of axes[0]
 axes.legend(loc="upper left")
 plt.tight_layout()

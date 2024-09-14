@@ -68,7 +68,7 @@ color_map = {
 }
 
 label_map = {
-    "loqer": "LoQER (diag)",
+    "loqer": "QERA-approx",
     "loftq": "LoftQ (5-iter)",
     "qlora": "QLoRA",
 }
