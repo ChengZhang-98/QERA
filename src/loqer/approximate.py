@@ -29,9 +29,10 @@ def compute_AB_and_approximation_error(
     df = pd.DataFrame(columns=["layer_name", "mse", "rank"])
 
     full_device_map = get_full_device_map(model)
-    model.to("cpu")
+    model = model.to("cpu")
 
     for layer_name in tqdm(layers_to_approximate, desc="Computing low-rank A and B"):
+        torch.cuda.empty_cache()
         # device
         layer = get_layer_by_name(model, layer_name)
         layer.to(full_device_map[layer_name])
@@ -43,6 +44,7 @@ def compute_AB_and_approximation_error(
             matched_entry = loqer_config[matched_entry]
         layer_loqer_config = deepcopy(loqer_config[matched_entry])
         layer_AB_dict, mse = _compute_scales_and_error_for_fc(layer_name, layer, scale, layer_loqer_config)
+        layer_AB_dict = {k: v.to("cpu") for k, v in layer_AB_dict.items()}
         AB_dict.update(layer_AB_dict)
         df.loc[len(df)] = [layer_name, mse, layer_loqer_config["rank"]]
 
