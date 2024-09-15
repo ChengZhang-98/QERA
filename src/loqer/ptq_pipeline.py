@@ -269,7 +269,9 @@ def pipeline_loqer():
         layers_to_approximate = find_layers_to_approximate(model)
         if AB_dict is None:
             logger.info("🚀 Loqer is enabled. Computing A & B...")
-            AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+            AB_dict, mse_df = compute_AB_and_approximation_error(
+                model, layers_to_approximate, scale_dict, loqer_config, False
+            )
             del scale_dict
             mse_df_emoji = mse_df.copy()
             mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
