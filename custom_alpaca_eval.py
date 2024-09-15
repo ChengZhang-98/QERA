@@ -13,7 +13,7 @@ import transformers
 from peft import PeftModel
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, HqqConfig
 from accelerate import dispatch_model
 
 from alpaca_eval import constants, utils, analyze, annotators, decoders, metrics
@@ -26,7 +26,7 @@ from loqer.utils import create_device_map
 
 logger = logging.getLogger("loqer." + __name__)
 
-WORKSPACE_DIR = Path(__file__).parents[1]
+WORKSPACE_DIR = Path(__file__).parent
 
 
 class ListDataset(Dataset):
@@ -45,6 +45,7 @@ def huggingface_custom_completions(
     model_name: str,
     AB_dict: str | dict,
     loqer_config: str | dict,
+    builtin_quantization: str = None,
     do_sample: bool = False,
     batch_size: int = 1,
     model_kwargs=None,
@@ -99,6 +100,13 @@ def huggingface_custom_completions(
 
     #  faster but slightly less accurate matrix multiplications
     torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = True
+    if builtin_quantization is not None:
+        assert loqer_config is None, "Cannot use builtin_quantization and loqer_config at the same time"
+        if builtin_quantization == "hqq-4bit":
+            q_config = HqqConfig(nbits=4, group_size=64, quant_scale=False, quant_zero=False, axis=0)
+            model_kwargs["quantization_config"] = q_config
+        else:
+            raise ValueError(f"Unknown builtin_quantization: {builtin_quantization}")
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
@@ -121,14 +129,17 @@ def huggingface_custom_completions(
             logger.info(f"🔍 model quantized with AB_dict attached")
         else:
             logger.warning(f"🔍 model quantized without AB_dict attached")
+    elif builtin_quantization is not None:
+        logger.info(f"🔍 model quantized with builtin quantization: {builtin_quantization}")
     else:
-        logger.warning("⚠️ No loqer config provided. Model will not be quantized.")
+        logger.warning("⚠️ No loqer config provided. Model will not be quantized via LoQER.")
     if hasattr(model, "tie_weights"):
         model.tie_weights()
 
     model.eval()
-    device_map = create_device_map(model, "auto-balanced")
-    model = dispatch_model(model, device_map)
+    if builtin_quantization is None:
+        device_map = create_device_map(model, "auto-balanced")
+        model = dispatch_model(model, device_map)
 
     if adapters_name:
         logging.info(f"Merging adapter from {adapters_name}.")
@@ -486,7 +497,9 @@ def evaluate_from_model(
         logging.info("cannot use `chunksize` with max_instances. Setting `chunksize` to None.")
         chunksize = None
 
-    base_dir = Path(kwargs.get("base_dir", constants.MODELS_CONFIG_DIR))
+    # *: hack to allow for relative paths
+    # base_dir = Path(kwargs.get("base_dir", constants.MODELS_CONFIG_DIR))
+    base_dir = Path(kwargs.get("base_dir", WORKSPACE_DIR.joinpath("src/loqer_alpaca_eval_models")))
     model_configs = utils.load_configs(model_configs, relative_to=base_dir)
     if reference_model_configs is not None:
         reference_model_configs = utils.load_configs(reference_model_configs, relative_to=base_dir)
