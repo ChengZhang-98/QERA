@@ -1,5 +1,6 @@
 import math
 import logging
+import time
 import multiprocessing
 
 
@@ -151,6 +152,8 @@ class ScaleHookFactoryRxx:
         self.torch_dtype = torch_dtype
         self.handles = []
 
+        self._force_cpu = False
+
     @torch.no_grad()
     def get_scale_hook(self, name: str) -> callable:
         """ """
@@ -173,19 +176,33 @@ class ScaleHookFactoryRxx:
                 self.compute_devices[name] = x.device
                 if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
-                self.scales[name] = torch.zeros(in_features, in_features, dtype=torch.float64)  # *: hard-coded float64
-                # self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
 
-            compute_device = self.compute_devices[name]
-            scales = self.scales[name].to(compute_device)
-            x = x.to(self.torch_dtype)
-            # batched outer product
-            # *: outer product in self.torch_dtype (float32 is preferred), then accumulate in float64
-            delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
-            # delta = torch.einsum("bi,bj->ij", x, x).to(self.torch_dtype)
-            scales += delta
-            self.scales[name] = scales.cpu()
-            self.n_samples[name] += n_samples
+                if self._force_cpu:
+                    self.scales[name] = np.zeros((in_features, in_features), dtype=np.float64)
+                else:
+                    self.scales[name] = torch.zeros(
+                        in_features, in_features, dtype=torch.float64
+                    )  # *: hard-coded float64
+                    # self.scales[name] = torch.zeros(in_features, in_features, dtype=self.torch_dtype)
+
+            if self._force_cpu:
+                x = x.cpu().numpy()
+                # delta = np.einsum("bi,bj->ij", x, x, optimize="optimal").astype(np.float64)
+                delta = np.tensordot(x, x, axes=([0], [0])).astype(np.float64)
+                self.scales[name] += delta
+                self.n_samples[name] += n_samples
+            else:
+                compute_device = self.compute_devices[name]
+                scales = self.scales[name].to(compute_device)
+                x = x.to(self.torch_dtype)
+                x = x.to(compute_device)
+                # batched outer product
+                # *: outer product in self.torch_dtype (float32 is preferred), then accumulate in float64
+                delta = torch.einsum("bi,bj->ij", x, x).to(torch.float64)  # *: hard-coded float64
+                # delta = torch.einsum("bi,bj->ij", x, x).to(self.torch_dtype)
+                scales += delta
+                self.scales[name] = scales.cpu()
+                self.n_samples[name] += n_samples
 
         return scale_hook
 
@@ -194,24 +211,26 @@ class ScaleHookFactoryRxx:
         self, progress_bar=False, sqrtm_implementation: str = "blocked", sqrtm_num_iters: int = 200
     ) -> dict[str, torch.Tensor]:
 
-        if sqrtm_implementation == "iterative":
-            ...
-            scale_names_prog_bar = tqdm(
-                self.scales, desc="Computing scale", disable=not progress_bar, total=len(self.scales)
-            )
-            for name in scale_names_prog_bar:
-                compute_device = self.compute_devices[name]
-                scale = self.scales[name].to(compute_device)
-                scale = scale.unsqueeze(0)
-                scale = sqrtm_newton_schulz(scale, numIters=sqrtm_num_iters)
-                scale = scale.squeeze(0)
-                scale = scale * (1 / math.sqrt(self.n_samples[name]))
-                scale = scale.cpu()
-                self.scales[name] = scale
-        elif sqrtm_implementation == "blocked":
+        # if sqrtm_implementation == "iterative":
+        #     ...
+        #     scale_names_prog_bar = tqdm(
+        #         self.scales, desc="Computing scale", disable=not progress_bar, total=len(self.scales)
+        #     )
+        #     for name in scale_names_prog_bar:
+        #         compute_device = self.compute_devices[name]
+        #         scale = self.scales[name].to(compute_device)
+        #         scale = scale.unsqueeze(0)
+        #         scale = sqrtm_newton_schulz(scale, numIters=sqrtm_num_iters)
+        #         scale = scale.squeeze(0)
+        #         scale = scale * (1 / math.sqrt(self.n_samples[name]))
+        #         scale = scale.cpu()
+        #         self.scales[name] = scale
+        # elif sqrtm_implementation == "blocked":
+        if sqrtm_implementation == "blocked":
             # convert to numpy
             for name in self.scales:
-                self.scales[name] = self.scales[name].numpy()
+                if not self._force_cpu:
+                    self.scales[name] = self.scales[name].numpy()
 
             # *: compute the square root sequentially
 
@@ -269,7 +288,8 @@ class ScaleHookFactoryMeanAbs:
     The idea of this scale drived from https://arxiv.org/abs/2402.02446
     it calculates the mean of x.abs() among the last dimension.
     """
-    def __init__(self, torch_dtype, scale_clamp_min:float = 1e-4) -> None:
+
+    def __init__(self, torch_dtype, scale_clamp_min: float = 1e-4) -> None:
         self.scales = {}
         self.n_samples = {}
         self.compute_devices = {}
@@ -330,6 +350,7 @@ class ScaleHookFactoryMeanAbs:
         for handle in self.handles:
             handle.remove()
         self.handles = []
+
 
 class ScaleHookFactoryIdentity:
     """
@@ -405,8 +426,6 @@ class ScaleHookFactoryMixed:
         for handle in self.handles:
             handle.remove()
         self.handles = []
-
-
 
 
 def register_scale_hooks(
