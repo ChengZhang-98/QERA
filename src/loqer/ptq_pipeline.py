@@ -265,16 +265,14 @@ def pipeline_loqer():
         share_scales(scale_dict, layers_to_register_and_share)
         logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
-    logger.info("🚀 Quantizing model...")
-    quantize_model(model, loqer_config)
-
     if not disable_loqer:
         layers_to_approximate = find_layers_to_approximate(model)
         if AB_dict is None:
             logger.info("🚀 Loqer is enabled. Computing A & B...")
-            AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+            AB_dict, mse_df = compute_AB_and_approximation_error(
+                model, layers_to_approximate, scale_dict, loqer_config, False
+            )
             del scale_dict
-            # attach_AB(model, layers_to_approximate, AB_dict)
             mse_df_emoji = mse_df.copy()
             mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
             logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
@@ -282,17 +280,19 @@ def pipeline_loqer():
             logger.info("🚀 Loqer is enabled and AB_dict is specified. Attaching A & B...")
             AB_dict = torch.load(AB_dict)
             mse_df = None
-            # attach_AB(model, layers_to_approximate, AB_dict)
     else:
         logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
 
+    del model
+    torch.cuda.empty_cache()
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_name, torch_dtype=eval_dtype, _attn_implementation="eager", **other_model_kwargs
     )
+    logger.info("🚀 Quantizing model...")
+    quantize_model(model, loqer_config)
     if hasattr(model, "tie_weights"):
         model.tie_weights()
     model.eval()
-    quantize_model(model, loqer_config)
     if not disable_loqer:
         attach_AB(model, layers_to_approximate, AB_dict)
     device_map_ = create_device_map(model, device_map=device_map)
@@ -542,7 +542,7 @@ def pipeline_q_baseline():
         help="Quantization method",
         choices=["bnb-4bit", "gptq", "awq", "bnb-8bit", "hqq-4bit", "hqq-3bit", "hqq-2bit"],
     )
-    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
+    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="bfloat16")
     parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
     parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
     parser.add_argument(
@@ -591,7 +591,7 @@ def pipeline_q_baseline():
         "--hqq-group-size",
         dest="hqq_group_size",
         type=int,
-        default=64,
+        default=128,
     )
     parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
     parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
@@ -1040,19 +1040,20 @@ def pipeline_loqer_chunked():
             yaml.dump(config, f)
     else:
         logger.info(f"🔊 All chunks of AB_dict are ready. Quantize model, attach AB_dict and run evaluation.")
+        del model
+        torch.cuda.empty_cache()
         # Load model and tokenizer
         tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_name, torch_dtype=eval_dtype, _attn_implementation="eager", **other_model_kwargs
         )
-        model.eval()
         if hasattr(model, "tie_weights"):
             model.tie_weights()
         device_map = create_device_map(model, device_map=device_map)
         logger.info(f"Device map: {device_map}")
-        model = dispatch_model(model, device_map)
         data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
         quantize_model(model, loqer_config)
+        model.eval()
 
     if len(missing_chunks) == 0:
         # merge all chunks
