@@ -1,0 +1,17 @@
+vicuna-7b-v1.5-4bit-hqq:
+  prompt_template: "vicuna-7b-v1.5-test/prompt.txt"
+  fn_completions: "huggingface_custom_completions"
+  completions_kwargs:
+    model_name: "lmsys/vicuna-7b-v1.5"
+    AB_dict: null
+    batch_size: 4
+    loqer_config: null
+    builtin_quantization: "hqq-4bit"
+    model_kwargs:
+      torch_dtype: "float16"
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 1.0
+    do_sample: True
+  pretty_name: "Vicuna 7B v1.5 (HQQ, 4-bit)"
+  link: "https://huggingface.co/lmsys/vicuna-7b-v1.5"
