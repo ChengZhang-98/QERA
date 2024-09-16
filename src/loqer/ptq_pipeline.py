@@ -222,6 +222,11 @@ def pipeline_loqer():
             torch_dtype=loqer_dtype,
             mode_map=loqer_scaling_mode_map,
         )
+        # !: forces to compute on CPUs
+        # TODO:
+        # if True:
+        #     profiler_factory._force_cpu = True
+        #     logger.warning("⚠️ Forces to compute on CPUs")
 
         calibration_datamodule = get_data_module(
             name=calibration_set,
@@ -350,6 +355,7 @@ def pipeline_loqer():
             mse_df.to_csv(output_dir / "approximation_error.csv", index=False)
             # save AB_dict
             AB_dict_path = output_dir / "AB_dict.pt"
+            AB_dict = {k: v.cpu() for k, v in AB_dict.items()}
             torch.save(AB_dict, AB_dict_path)
             config["AB_dict"] = AB_dict_path.resolve().as_posix()
 
@@ -965,6 +971,11 @@ def pipeline_loqer_chunked():
             torch_dtype=loqer_dtype,
             mode_map=loqer_scaling_mode_map,
         )
+        # !: forces to compute on CPUs
+        # TODO:
+        # if True:
+        #     profiler_factory._force_cpu = True
+        #     logger.warning("⚠️ Forces to compute on CPUs")
 
         calibration_datamodule = get_data_module(
             name=calibration_set,
@@ -1007,8 +1018,8 @@ def pipeline_loqer_chunked():
         share_scales(scale_dict, layers_to_register_and_share)
         logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
-        logger.info("🚀 Quantizing model...")
-        quantize_model(model, loqer_config)
+        # logger.info("🚀 Quantizing model...")
+        # quantize_model(model, loqer_config)
 
         logger.info("🚀 Loqer is enabled. Computing A & B...")
         layers_to_approximate = find_layers_to_approximate(model)
@@ -1035,6 +1046,7 @@ def pipeline_loqer_chunked():
         config_dir.mkdir(parents=True, exist_ok=True)
 
         mse_df.to_csv(mse_df_dir.joinpath(f"{chunk_tag}.csv"), index=False)
+        AB_dict = {k: v.cpu() for k, v in AB_dict.items()}
         torch.save(AB_dict, AB_dict_path)
         with open(config_dir.joinpath(f"{chunk_tag}.yaml"), "w") as f:
             yaml.dump(config, f)
