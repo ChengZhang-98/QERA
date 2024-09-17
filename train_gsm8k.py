@@ -59,6 +59,8 @@ require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/lang
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
+torch.set_float32_matmul_precision('high')
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
@@ -741,62 +743,70 @@ def main():
                 progress_bar.update(1)
                 completed_steps += 1
 
-            if isinstance(checkpointing_steps, int):
-                if completed_steps % checkpointing_steps == 0:
-                    output_dir = f"step_{completed_steps}"
-                    if args.output_dir is not None:
-                        output_dir = os.path.join(args.output_dir, output_dir)
-                    accelerator.save_state(output_dir)
+            # if isinstance(checkpointing_steps, int):
+            #     if completed_steps % checkpointing_steps == 0:
+            #         output_dir = f"step_{completed_steps}"
+            #         if args.output_dir is not None:
+            #             output_dir = os.path.join(args.output_dir, output_dir)
+            #         accelerator.save_state(output_dir)
             if completed_steps >= args.max_train_steps:
                 break
 
-        model.eval()
-        gen_kwargs = {
-            "max_new_tokens": args.max_target_length,
-            "temperature": args.temperature,
-            "top_k": args.k,
-            "top_p": args.p,
-            "do_sample": True,
-        }
-        ans_pred_list = []
-        ans_gold_list = []
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                gen_kwargs["input_ids"] = batch["input_ids"]
-                gen_kwargs["attention_mask"] = batch["attention_mask"]
-                generated_tokens = accelerator.unwrap_model(model).generate(**gen_kwargs)
+        if epoch >= math.ceil(starting_epoch + 0.5 * args.num_train_epochs):
+            model.eval()
+            gen_kwargs = {
+                "max_new_tokens": args.max_target_length,
+                "temperature": args.temperature,
+                "top_k": args.k,
+                "top_p": args.p,
+                "do_sample": True,
+            }
+            ans_pred_list = []
+            ans_gold_list = []
+            for step, batch in enumerate(eval_dataloader):
+                with torch.no_grad():
+                    gen_kwargs["input_ids"] = batch["input_ids"]
+                    gen_kwargs["attention_mask"] = batch["attention_mask"]
+                    generated_tokens = accelerator.unwrap_model(model).generate(**gen_kwargs)
 
-            pred_tokens = generated_tokens[:, args.max_source_length :]
-            pred_tokens = accelerator.pad_across_processes(pred_tokens, dim=1, pad_index=tokenizer.pad_token_id)
-            gold_tokens = batch["labels"]
+                pred_tokens = generated_tokens[:, args.max_source_length :]
+                pred_tokens = accelerator.pad_across_processes(pred_tokens, dim=1, pad_index=tokenizer.pad_token_id)
+                gold_tokens = batch["labels"]
 
-            if not args.pad_to_max_length:
-                # If we did not pad to max length, we need to pad the labels too
-                gold_tokens = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+                if not args.pad_to_max_length:
+                    # If we did not pad to max length, we need to pad the labels too
+                    gold_tokens = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
 
-            pred_tokens, gold_tokens = accelerator.gather_for_metrics((pred_tokens, gold_tokens))
-            pred_tokens, gold_tokens = pred_tokens.cpu().numpy(), gold_tokens.cpu().numpy()
+                pred_tokens, gold_tokens = accelerator.gather_for_metrics((pred_tokens, gold_tokens))
+                pred_tokens, gold_tokens = pred_tokens.cpu().numpy(), gold_tokens.cpu().numpy()
 
-            if isinstance(pred_tokens, tuple):
-                pred_tokens = pred_tokens[0]
-            decoded_pred = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
-            decoded_gold = tokenizer.batch_decode(gold_tokens, skip_special_tokens=True)
+                if isinstance(pred_tokens, tuple):
+                    pred_tokens = pred_tokens[0]
+                decoded_pred = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
+                decoded_gold = tokenizer.batch_decode(gold_tokens, skip_special_tokens=True)
 
-            # Extract the numbers in sentences
-            # accelerator.print(decoded_pred)
-            ans_pred_list += [extract_answer_number(sentence_pred) for sentence_pred in decoded_pred]
-            ans_gold_list += [extract_answer_number(sentence_gold) for sentence_gold in decoded_gold]
+                # Extract the numbers in sentences
+                # accelerator.print(decoded_pred)
+                ans_pred_list += [extract_answer_number(sentence_pred) for sentence_pred in decoded_pred]
+                ans_gold_list += [extract_answer_number(sentence_gold) for sentence_gold in decoded_gold]
 
-        # accelerator.print(ans_pred_list)
-        # accelerator.print(ans_gold_list)
-        accuracy = compute_accuracy(ans_gold_list, ans_pred_list)
+            # accelerator.print(ans_pred_list)
+            # accelerator.print(ans_gold_list)
+            accuracy = compute_accuracy(ans_gold_list, ans_pred_list)
 
-        logger.info(f"epoch {epoch}: accuracy: {accuracy}")
+            logger.info(f"epoch {epoch}: accuracy: {accuracy}")
+            if args.with_tracking:
+                accelerator.log(
+                    {
+                        "accuracy": accuracy,
+                    },
+                    step=completed_steps,
+                )
 
         if args.with_tracking:
             accelerator.log(
                 {
-                    "accuracy": accuracy,
+                    # "accuracy": accuracy,
                     "train_loss": total_loss.item() / len(train_dataloader),
                     "epoch": epoch,
                     "step": completed_steps,
@@ -804,44 +814,44 @@ def main():
                 step=completed_steps,
             )
 
-        if args.push_to_hub and epoch < args.num_train_epochs - 1:
-            accelerator.wait_for_everyone()
-            unwrapped_model = accelerator.unwrap_model(model)
-            unwrapped_model.save_pretrained(
-                args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-            )
-            if accelerator.is_main_process:
-                tokenizer.save_pretrained(args.output_dir)
-                api.upload_folder(
-                    repo_id=repo_id,
-                    folder_path=args.output_dir,
-                    commit_message=f"Training in progress epoch {epoch}",
-                    run_as_future=True,
-                )
+        # if args.push_to_hub and epoch < args.num_train_epochs - 1:
+        #     accelerator.wait_for_everyone()
+        #     unwrapped_model = accelerator.unwrap_model(model)
+        #     unwrapped_model.save_pretrained(
+        #         args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
+        #     )
+        #     if accelerator.is_main_process:
+        #         tokenizer.save_pretrained(args.output_dir)
+        #         api.upload_folder(
+        #             repo_id=repo_id,
+        #             folder_path=args.output_dir,
+        #             commit_message=f"Training in progress epoch {epoch}",
+        #             run_as_future=True,
+        #         )
 
-        if args.checkpointing_steps == "epoch":
-            output_dir = f"epoch_{epoch}"
-            if args.output_dir is not None:
-                output_dir = os.path.join(args.output_dir, output_dir)
-            accelerator.save_state(output_dir)
+        # if args.checkpointing_steps == "epoch":
+        #     output_dir = f"epoch_{epoch}"
+        #     if args.output_dir is not None:
+        #         output_dir = os.path.join(args.output_dir, output_dir)
+        #     accelerator.save_state(output_dir)
 
     if args.with_tracking:
         accelerator.end_training()
 
-    if args.output_dir is not None:
-        accelerator.wait_for_everyone()
-        unwrapped_model = accelerator.unwrap_model(model)
-        unwrapped_model.save_pretrained(
-            args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
-        )
-        if accelerator.is_main_process:
-            tokenizer.save_pretrained(args.output_dir)
-            if args.push_to_hub:
-                api.upload_folder(
-                    repo_id=repo_id,
-                    folder_path=args.output_dir,
-                    commit_message="End of training",
-                )
+    # if args.output_dir is not None:
+    #     accelerator.wait_for_everyone()
+    #     unwrapped_model = accelerator.unwrap_model(model)
+    #     unwrapped_model.save_pretrained(
+    #         args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
+    #     )
+    #     if accelerator.is_main_process:
+    #         tokenizer.save_pretrained(args.output_dir)
+    #         if args.push_to_hub:
+    #             api.upload_folder(
+    #                 repo_id=repo_id,
+    #                 folder_path=args.output_dir,
+    #                 commit_message="End of training",
+    #             )
 
 
 PATTERN_NUMBER = re.compile(r"-?\d+\.?\d*")

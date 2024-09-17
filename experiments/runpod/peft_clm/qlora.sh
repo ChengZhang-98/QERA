@@ -1,4 +1,4 @@
-workdir=~/Projects/LoQER/experiments/jamie/peft_clm
+workdir=/workspace/LoQER/experiments/runpod/peft_clm
 cd $workdir
 
 function check_return_value() {
@@ -7,14 +7,14 @@ function check_return_value() {
     fi
 }
 
-model_name=meta-llama/Llama-2-7b-hf
+model_name=meta-llama/Meta-Llama-3.1-8B
 # model_name=Cheng98/TinyLlama_v1.1
 # task="wikitext2"
 task="slim_pajama_100m"
 adapter_init="qlora"
 lora_rank=8
 quant_type="fp"
-quant_bits=4
+quant_bits=2
 seed=42
 
 timestamp=$(date +%Y%m%d-%H%M%S)

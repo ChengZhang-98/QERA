@@ -1,6 +1,5 @@
-workdir=~/Projects/LoQER
-ckpt_dir=$workdir/checkpoints/jamie
-env_name=loqer
+workdir=/workspace/LoQER
+ckpt_dir=$workdir/checkpoints/runpod
 cd $workdir
 
 function check_return_value() {
@@ -69,7 +68,7 @@ lora_alpha=$((lora_rank * 2))
 loftq_num_iters=5
 
 # loqer
-loqer_num_calibration_samples=512
+loqer_num_calibration_samples=256
 loqer_calibration_batch_size=2
 if [[ $quant_bits == 2 ]]; then
     loqer_scaling_mode=rxx
@@ -84,9 +83,9 @@ task_name_for_calibration="slim_pajama_100m_peft"
 other_train_flags=""
 
 # training
-per_device_train_batch_size=4
+per_device_train_batch_size=8
 per_device_eval_batch_size=8
-num_train_epochs=10
+num_train_epochs=6
 gradient_accumulation_steps=4
 lr_scheduler_type=cosine
 num_warmup_steps=100
@@ -96,11 +95,11 @@ dataset_name_esc="gsm8k"
 
 # lora, qlora, loftq, loqer
 if [[ $adapter_init == "qlora" ]]; then
-    adapt_output_dir=${ckpt_dir}/qlora_clm/${model_name_esc}_rank-${lora_rank}_${quant_type}_${quant_bits}bit
+    adapt_output_dir=${ckpt_dir}/qlora_clm/${model_name_esc}_rank-${lora_rank}_${quant_type}_${quant_bits}bit_seed-${seed}
 elif [[ $adapter_init == "loftq" ]]; then
     adapt_output_dir=${ckpt_dir}/loftq_clm/${model_name_esc}_rank-${lora_rank}_${loftq_num_iters}iter_${quant_type}_${quant_bits}bit
 elif [[ $adapter_init == "lora" ]]; then
-    adapt_output_dir=${ckpt_dir}/lora_clm/${model_name_esc}_rank-${lora_rank}
+    adapt_output_dir=${ckpt_dir}/lora_clm/${model_name_esc}_rank-${lora_rank}_seed-${seed}
 elif [[ $adapter_init == "loqer" ]]; then
     adapt_output_dir=${ckpt_dir}/loqer_clm/${model_name_esc}_rank-${lora_rank}_${loqer_scaling_mode}_calibrated-on-${task_name_for_calibration}_${quant_type}_${quant_bits}bit
 elif [[ $adapter_init == "full-finetune" ]]; then
@@ -118,7 +117,7 @@ fi
 if [[ $adapter_init != "full-finetune" ]]; then
     # if output_dir not exists, create adapted model
     if [[ $overwrite_adapt_dir == "true" || ! -d $adapt_output_dir ]]; then
-        conda run -n $env_name --no-capture-output python adapt_and_save.py \
+        python adapt_and_save.py \
             clm $model_name $adapter_init $adapt_output_dir \
             --loqer-calibration-set $task_name_for_calibration \
             --loqer-num-calibration-samples $loqer_num_calibration_samples \
@@ -155,12 +154,12 @@ else
     lora_adapter_dir="NA"
 fi
 
-learning_rate_list=(3e-5)
+learning_rate_list=(6e-5)
 # loop over learning rates
 for learning_rate in ${learning_rate_list[@]}; do
     timestamp=$(date +%Y%m%d-%H%M%S)
     training_ckpt_dir=${ckpt_dir}/fine-tune-ckpt/${dataset_name_esc}/${model_name_esc}/${adapter_init}/$(basename $adapt_output_dir)_lr-${learning_rate}_${timestamp}
-    run_name=${dataset_name_esc}_${adapter_init}_$(basename $adapt_output_dir)_lr-${learning_rate}
+    run_name=${dataset_name_esc}_${adapter_init}_$(basename $adapt_output_dir)_lr-${learning_rate}_seed-${seed}
 
     if [[ $adapter_init == "full-finetune" || $adapter_init == "lora" ]]; then
         tags="${dataset_name_esc} ${adapter_init} ${model_name_esc} rank-${lora_rank}"
@@ -174,7 +173,7 @@ for learning_rate in ${learning_rate_list[@]}; do
         fi
     fi
 
-    conda run -n $env_name --no-capture-output accelerate launch train_gsm8k.py \
+    accelerate launch train_gsm8k.py \
         --model_name_or_path $model_name_or_path --tokenizer_name $model_name \
         --lora_adapter_dir $lora_adapter_dir \
         --output_dir $training_ckpt_dir \

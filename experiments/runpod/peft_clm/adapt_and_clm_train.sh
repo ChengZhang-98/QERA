@@ -1,6 +1,5 @@
-workdir=~/Projects/LoQER
-ckpt_dir=$workdir/checkpoints/jamie
-env_name=loqer
+workdir=/workspace/LoQER
+ckpt_dir=$workdir/checkpoints/runpod
 cd $workdir
 
 function check_return_value() {
@@ -76,8 +75,8 @@ lora_alpha=$((lora_rank * 2))
 loftq_num_iters=5
 
 # loqer
-loqer_num_calibration_samples=512
-loqer_calibration_batch_size=2
+loqer_num_calibration_samples=256
+loqer_calibration_batch_size=4
 if [[ $quant_bits == 2 ]]; then
     loqer_scaling_mode=rxx
 else
@@ -110,7 +109,7 @@ fi
 other_train_flags=""
 
 # training
-per_device_train_batch_size=1
+per_device_train_batch_size=2
 per_device_eval_batch_size=8
 # num_train_epochs=3
 max_train_steps=1000
@@ -146,7 +145,7 @@ adapt_output_dir=${adapt_output_dir}_seed-${seed}
 if [[ $adapter_init != "full-finetune" ]]; then
     # if output_dir not exists, create adapted model
     if [[ $overwrite_adapt_dir == "true" || ! -d $adapt_output_dir ]]; then
-        conda run -n $env_name --no-capture-output python adapt_and_save.py \
+        python adapt_and_save.py \
             clm $model_name $adapter_init $adapt_output_dir \
             --loqer-calibration-set $task_name_for_calibration \
             --loqer-num-calibration-samples $loqer_num_calibration_samples \
@@ -162,7 +161,7 @@ if [[ $adapter_init != "full-finetune" ]]; then
             --num-workers 16 \
             --seed $seed \
             --mxint-block-size $mxint_block_size \
-            --peek-post-init-metrics -ow # overwrite the output directory if it exists
+            -ow # overwrite the output directory if it exists
         check_return_value "Adapt and save"
         sleep 2
     else
@@ -201,7 +200,7 @@ for learning_rate in ${learning_rate_list[@]}; do
         fi
     fi
 
-    conda run -n $env_name --no-capture-output torchrun --nproc_per_node 8 clm_train.py \
+    torchrun --nproc_per_node 4 clm_train.py \
         --tokenizer_name $model_name --config_name $model_name --model_name_or_path $model_name_or_path \
         $dataset_flags_for_train \
         --block_size $max_seq_len \
@@ -215,7 +214,8 @@ for learning_rate in ${learning_rate_list[@]}; do
         --output_dir $training_ckpt_dir \
         --lora_adapter_dir $lora_adapter_dir \
         --evaluate_every_n_steps $evaluate_every_n_steps \
-        --with_tracking --report_to wandb --run_name $run_name --wandb_tags $tags $other_train_flags
+        --with_tracking --report_to wandb --run_name $run_name --wandb_tags $tags $other_train_flags \
+        --use_gradient_checkpointing
 
     # --num_train_epochs $num_train_epochs \
     # check return value
