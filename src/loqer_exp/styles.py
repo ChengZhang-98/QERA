@@ -52,7 +52,7 @@ CZ_COLOR_TO_HEX = {
     # red
     "cz_darkred": "#8C000F",
     "cz_red": "#E50000",
-    "cz_lightred": "#FC5A50",
+    "cz_lightred": "#fd958c",
     # orange
     "cz_darkorange": "#D2691E",
     "cz_orange": "#F97306",
