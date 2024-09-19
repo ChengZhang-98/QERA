@@ -88,6 +88,7 @@ plot_winrate(
     ["ZeroQ", "LQER", "QERA"],
     xlim=[0, 100],
 )
+# set y label
 plt.tight_layout()
 plt.show()
 
