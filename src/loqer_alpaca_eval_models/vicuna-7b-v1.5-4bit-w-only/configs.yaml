@@ -1,9 +1,9 @@
-vicuna-7b-v1.5-4bit-identity:
+vicuna-7b-v1.5-4bit-w-only:
   prompt_template: "vicuna-7b-v1.5-test/prompt.txt"
   fn_completions: "huggingface_custom_completions"
   completions_kwargs:
     model_name: "lmsys/vicuna-7b-v1.5"
-    AB_dict: checkpoints/alpaca_eval_AB_dict/vicuna-7b-v1.5-identity-gs32/AB_dict.pt
+    AB_dict: null
     batch_size: 4
     loqer_config:
       default-1:
@@ -40,5 +40,5 @@ vicuna-7b-v1.5-4bit-identity:
     temperature: 0.7
     top_p: 1.0
     do_sample: True
-  pretty_name: "Vicuna 7B v1.5 (Identity, 4-bit)"
+  pretty_name: "Vicuna 7B v1.5 (W-Only, 4-bit)"
   link: "https://huggingface.co/lmsys/vicuna-7b-v1.5"

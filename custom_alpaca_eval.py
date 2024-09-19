@@ -4,6 +4,7 @@ import yaml
 import sys
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Sequence, Union
+import os
 
 import fire
 import pandas as pd
@@ -828,4 +829,10 @@ def main():
 
 
 if __name__ == "__main__":
+    """
+    # create answers
+    CUDA_VISIBLE_DEVICES=3 python custom_alpaca_eval.py evaluate_from_model --model_configs vicuna-7b-v1.5-4bit-w-only --decode_only --output_path ./checkpoints/alpaca_eval/vicuna-7b-v1.5-4bit-w-only
+    # evaluate answers
+
+    """
     fire.Fire(ALL_FUNCTIONS)

@@ -3,8 +3,8 @@ vicuna-7b-v1.5-4bit-rxx:
   fn_completions: "huggingface_custom_completions"
   completions_kwargs:
     model_name: "lmsys/vicuna-7b-v1.5"
-    AB_dict: checkpoints/alpaca_eval_AB_dict/vicuna-7b-v1.5-rxx/AB_dict.pt
-    batch_size: 4
+    AB_dict: checkpoints/alpaca_eval_AB_dict/vicuna-7b-v1.5-rxx-gs32/AB_dict.pt
+    batch_size: 32
     loqer_config:
       default-1:
         b_quantizer:
