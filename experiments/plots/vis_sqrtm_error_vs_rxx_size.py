@@ -4,12 +4,9 @@ from pathlib import Path
 
 sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import yaml
-import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_color
+from loqer_exp.styles import set_default_style, plot_palette, get_color
 
 
 def visualize_sqrtm_error_vs_rxx_size():
@@ -63,19 +60,22 @@ def visualize_sqrtm_error_vs_rxx_size():
     set_default_style()
     linewidth = 5.5  # inch
     lineheight = 9  # inch
-    figsize = (linewidth * 0.8, linewidth * 0.8 * 0.75)
-    markersize = 6
-    FONT_SIZE_S = 7
-    FONT_SIZE_M = 8
-    FONT_SIZE_L = 10
+    figsize = (linewidth, linewidth * 0.75)
+    markersize = 4
+    FONT_SIZE_ANNO = 8
+    FONT_SIZE_S = 10
+    FONT_SIZE_M = 12
+    FONT_SIZE_L = 12
+    textweight = 600
 
     plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes
     plt.rc("axes", titlesize=FONT_SIZE_M)  # fontsize of the axes title
-    plt.rc("axes", labelsize=FONT_SIZE_L)  # fontsize of the x and y labels
+    plt.rc("axes", labelsize=FONT_SIZE_M)  # fontsize of the x and y labels
     plt.rc("xtick", labelsize=FONT_SIZE_S)  # fontsize of the tick labels
     plt.rc("ytick", labelsize=FONT_SIZE_S)  # fontsize of the tick labels
     plt.rc("legend", fontsize=FONT_SIZE_S)  # legend fontsize
     plt.rc("figure", titlesize=FONT_SIZE_L)  # fontsize of the figure title
+    plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
     fig, ax = plt.subplots(figsize=figsize)
     ax.set_yscale("log")
     # plt.plot(
@@ -136,5 +136,4 @@ def visualize_sqrtm_error_vs_rxx_size():
     plt.savefig("sqrtm_error_vs_rxx_size.pdf", bbox_inches="tight")
 
 
-# %%
 visualize_sqrtm_error_vs_rxx_size()

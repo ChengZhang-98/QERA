@@ -3,28 +3,23 @@ import sys
 from pathlib import Path
 
 sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import yaml
-import seaborn as sns
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_cbf_color
+from loqer_exp.styles import set_default_style, plot_palette, get_cbf_color
 
-# plot_palette("cz")
-# plot_palette("ic")
 plot_palette("cbf")
 
 # %%
 set_default_style()
 linewidth = 5.5  # inch
 lineheight = 9  # inch
-figsize = (linewidth * 0.5, linewidth * 0.5 * 0.75)
+figsize = (linewidth, linewidth * 0.75)
 markersize = 4
-FONT_SIZE_ANNO = 6
-FONT_SIZE_S = 9
-FONT_SIZE_M = 9
-FONT_SIZE_L = 11
+FONT_SIZE_ANNO = 8
+FONT_SIZE_S = 10
+FONT_SIZE_M = 12
+FONT_SIZE_L = 12
 textweight = 600
 
 plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes

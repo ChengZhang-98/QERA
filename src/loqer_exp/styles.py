@@ -13,7 +13,7 @@ def set_default_style():
     seaborn.set_theme(style="whitegrid")
 
 
-IMPERIAL_COLOR_TO_HEX = {
+IC_COLOR_TO_HEX = {
     "ic_dark": "#232333",
     "ic_navy_blue": "#000080",
     "ic_saddle_brown": "#8b4513",
@@ -45,7 +45,7 @@ IMPERIAL_COLOR_TO_HEX = {
 
 
 def get_ic_color(name):
-    return IMPERIAL_COLOR_TO_HEX[name]
+    return IC_COLOR_TO_HEX[name]
 
 
 CZ_COLOR_TO_HEX = {
@@ -116,7 +116,7 @@ def plot_palette(palette_name: str, figsize=(5, 3)):
     if palette_name == "cz":
         palette = CZ_COLOR_TO_HEX
     elif palette_name == "ic":
-        palette = IMPERIAL_COLOR_TO_HEX
+        palette = IC_COLOR_TO_HEX
     elif palette_name == "cbf":
         palette = COLOR_BLIND_FRIENDLY_TO_HEX
     else:
@@ -132,7 +132,7 @@ def plot_palette(palette_name: str, figsize=(5, 3)):
 
 
 def get_color(name):
-    if name in IMPERIAL_COLOR_TO_HEX:
+    if name in IC_COLOR_TO_HEX:
         return get_ic_color(name)
     if name in CZ_COLOR_TO_HEX:
         return get_cz_color(name)
