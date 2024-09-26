@@ -19,12 +19,12 @@ plot_palette("cbf")
 set_default_style()
 linewidth = 5.5  # inch
 lineheight = 9  # inch
-figsize = (linewidth * 0.5, linewidth * 0.5 * 0.75)
+figsize = (linewidth, linewidth * 0.75)
 markersize = 4
-FONT_SIZE_ANNO = 6
-FONT_SIZE_S = 9
-FONT_SIZE_M = 9
-FONT_SIZE_L = 11
+FONT_SIZE_ANNO = 8
+FONT_SIZE_S = 10
+FONT_SIZE_M = 12
+FONT_SIZE_L = 12
 textweight = 600
 
 plt.rc("font", size=FONT_SIZE_S)  # controls default text sizes

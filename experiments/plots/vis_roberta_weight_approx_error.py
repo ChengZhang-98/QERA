@@ -90,7 +90,7 @@ def plot_error_vs_num_iters(loftq_errors_list: list[list[float]], loftq_labels: 
     assert all(len(loftq_errors) == len(loftq_errors_list[0]) for loftq_errors in loftq_errors_list)
 
     num_iters = len(loftq_errors_list[0])
-    x = list(range(num_iters))
+    x = list(range(1, num_iters+1))
 
     colors = color_map(np.linspace(0.1, 0.9, len(loftq_errors_list)))
 
