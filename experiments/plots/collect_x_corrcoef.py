@@ -113,7 +113,7 @@ if __name__ == "__main__":
     from safetensors.torch import save_file
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    model_names = ["meta-llama/Meta-Llama-3-8B"]  # ["Cheng98/TinyLlama_v1.1"]
+    model_names = ["meta-llama/Meta-Llama-3-8B"]
     target_layers = [
         r"model\.layers\.(0|3|7|11|15|19|23|27|31)\.self_attn\.k_proj",
         r"model\.layers\.(0|3|7|11|15|19|23|27|31)\.self_attn\.o_proj",

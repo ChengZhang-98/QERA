@@ -297,10 +297,6 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
-    # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    # send_example_telemetry("run_clm_no_trainer", args)
-
     # Initialize the accelerator. We will let the accelerator handle device placement for us in this example.
     # If we're using tracking, we also need to initialize it here and it will by default pick up all supported trackers
     # in the environment
@@ -443,23 +439,6 @@ def main():
     tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
     tokenizer.padding_side = "left"  # Allow batched inference
     tokenizer.truncation_side = "left"
-
-    # if args.model_name_or_path:
-    #     model = AutoModelForCausalLM.from_pretrained(
-    #         args.model_name_or_path,
-    #         from_tf=bool(".ckpt" in args.model_name_or_path),
-    #         config=config,
-    #         low_cpu_mem_usage=True,
-    #         quantization_config=BitsAndBytesConfig(
-    #             load_in_4bit=True,
-    #             bnb_4bit_use_double_quant=False,
-    #             bnb_4bit_quant_type="nf4",
-    #             bnb_4bit_compute_dtype=config.torch_dtype,
-    #         ),
-    #     )
-    # else:
-    #     logger.info("Training new model from scratch")
-    #     model = AutoModelForCausalLM.from_config(config, trust_remote_code=args.trust_remote_code)
 
     ##########################
     #       Peft Model       #
@@ -664,7 +643,7 @@ def main():
             tracker_init_kwargs["wandb"]["name"] = args.run_name
         if args.wandb_tags is not None:
             tracker_init_kwargs["wandb"]["tags"] = args.wandb_tags
-        accelerator.init_trackers("gsm8k_train", experiment_config, tracker_init_kwargs)
+        accelerator.init_trackers("train_gsm8k", experiment_config, tracker_init_kwargs)
 
     # Train!
     total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -750,53 +729,59 @@ def main():
             if completed_steps >= args.max_train_steps:
                 break
 
-        model.eval()
-        gen_kwargs = {
-            "max_new_tokens": args.max_target_length,
-            "temperature": args.temperature,
-            "top_k": args.k,
-            "top_p": args.p,
-            "do_sample": True,
-        }
-        ans_pred_list = []
-        ans_gold_list = []
-        for step, batch in enumerate(eval_dataloader):
-            with torch.no_grad():
-                gen_kwargs["input_ids"] = batch["input_ids"]
-                gen_kwargs["attention_mask"] = batch["attention_mask"]
-                generated_tokens = accelerator.unwrap_model(model).generate(**gen_kwargs)
+        # if epoch > 0.5 * (starting_epoch + args.num_train_epochs):
+        if True:
+            model.eval()
+            gen_kwargs = {
+                "max_new_tokens": args.max_target_length,
+                "temperature": args.temperature,
+                "top_k": args.k,
+                "top_p": args.p,
+                "do_sample": True,
+            }
+            ans_pred_list = []
+            ans_gold_list = []
+            for step, batch in enumerate(eval_dataloader):
+                with torch.no_grad():
+                    gen_kwargs["input_ids"] = batch["input_ids"]
+                    gen_kwargs["attention_mask"] = batch["attention_mask"]
+                    generated_tokens = accelerator.unwrap_model(model).generate(**gen_kwargs)
 
-            pred_tokens = generated_tokens[:, args.max_source_length :]
-            pred_tokens = accelerator.pad_across_processes(pred_tokens, dim=1, pad_index=tokenizer.pad_token_id)
-            gold_tokens = batch["labels"]
+                pred_tokens = generated_tokens[:, args.max_source_length :]
+                pred_tokens = accelerator.pad_across_processes(pred_tokens, dim=1, pad_index=tokenizer.pad_token_id)
+                gold_tokens = batch["labels"]
 
-            if not args.pad_to_max_length:
-                # If we did not pad to max length, we need to pad the labels too
-                gold_tokens = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+                if not args.pad_to_max_length:
+                    # If we did not pad to max length, we need to pad the labels too
+                    gold_tokens = accelerator.pad_across_processes(
+                        batch["labels"], dim=1, pad_index=tokenizer.pad_token_id
+                    )
 
-            pred_tokens, gold_tokens = accelerator.gather_for_metrics((pred_tokens, gold_tokens))
-            pred_tokens, gold_tokens = pred_tokens.cpu().numpy(), gold_tokens.cpu().numpy()
+                pred_tokens, gold_tokens = accelerator.gather_for_metrics((pred_tokens, gold_tokens))
+                pred_tokens, gold_tokens = pred_tokens.cpu().numpy(), gold_tokens.cpu().numpy()
 
-            if isinstance(pred_tokens, tuple):
-                pred_tokens = pred_tokens[0]
-            decoded_pred = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
-            decoded_gold = tokenizer.batch_decode(gold_tokens, skip_special_tokens=True)
+                if isinstance(pred_tokens, tuple):
+                    pred_tokens = pred_tokens[0]
+                decoded_pred = tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
+                decoded_gold = tokenizer.batch_decode(gold_tokens, skip_special_tokens=True)
 
-            # Extract the numbers in sentences
-            # accelerator.print(decoded_pred)
-            ans_pred_list += [extract_answer_number(sentence_pred) for sentence_pred in decoded_pred]
-            ans_gold_list += [extract_answer_number(sentence_gold) for sentence_gold in decoded_gold]
+                # Extract the numbers in sentences
+                # accelerator.print(decoded_pred)
+                ans_pred_list += [extract_answer_number(sentence_pred) for sentence_pred in decoded_pred]
+                ans_gold_list += [extract_answer_number(sentence_gold) for sentence_gold in decoded_gold]
 
-        # accelerator.print(ans_pred_list)
-        # accelerator.print(ans_gold_list)
-        accuracy = compute_accuracy(ans_gold_list, ans_pred_list)
+            # accelerator.print(ans_pred_list)
+            # accelerator.print(ans_gold_list)
+            accuracy = compute_accuracy(ans_gold_list, ans_pred_list)
 
-        logger.info(f"epoch {epoch}: accuracy: {accuracy}")
+            logger.info(f"epoch {epoch}: accuracy: {accuracy}")
+
+            if args.with_tracking:
+                accelerator.log({"accuracy": accuracy}, step=completed_steps)
 
         if args.with_tracking:
             accelerator.log(
                 {
-                    "accuracy": accuracy,
                     "train_loss": total_loss.item() / len(train_dataloader),
                     "epoch": epoch,
                     "step": completed_steps,

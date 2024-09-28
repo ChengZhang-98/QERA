@@ -4,17 +4,12 @@ from pathlib import Path
 import re
 
 sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import yaml
 import seaborn as sns
 from safetensors.torch import load_file
 
-from loqer_exp.styles import set_default_style, get_cz_color, get_ic_color, plot_palette, cm2inch, get_color
-
-plot_palette("cz")
-plot_palette("ic")
+from loqer_exp.styles import set_default_style, plot_palette
 
 # %%
 set_default_style()
@@ -78,7 +73,7 @@ def plot_model_corrcoef(model_coef_dict, first_n_dims=64):
 
 # %%
 # tinyllama
-tinyllama_coef_path = "corrcoef_Cheng98_TinyLlama_v1.1_20240902-112933.safetensors"
+tinyllama_coef_path = "corrcoef_TinyLlama_v1.1_20240902-112933.safetensors"
 
 tinyllama_coef_dict = load_file(tinyllama_coef_path)
 # sort the dictionary by the layer number
