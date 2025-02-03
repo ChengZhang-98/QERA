@@ -10,15 +10,15 @@ import pandas as pd
 import yaml
 import datetime
 
-from loqer.datasets import get_data_module_for_peft
-from loqer.models import find_layers_to_register_scale_hook
-from loqer.statistic_profiler import register_scale_hooks, share_scales
-from loqer.fine_tuning import (
+from qera.datasets import get_data_module_for_peft
+from qera.models import find_layers_to_register_scale_hook
+from qera.statistic_profiler import register_scale_hooks, share_scales
+from qera.fine_tuning import (
     replace_lora_weights_loftq_4bit,
-    replace_lora_weights_loqer_4bit,
+    replace_lora_weights_qera_4bit,
     replace_lora_weights_loftq_kbit,
     replace_lora_weight_qlora_kbit,
-    replace_lora_weight_loqer_kbit,
+    replace_lora_weight_qera_kbit,
 )
 
 
@@ -60,10 +60,14 @@ def create_adapted_model(
             bnb_4bit_quant_type="fp4" if quant_type == "fp" else "nf4",
             llm_int8_skip_modules=["classifier", "lm_head"],
         )
-        model = transformers.AutoModelForMaskedLM.from_pretrained(model_name, quantization_config=bnb_config)
+        model = transformers.AutoModelForMaskedLM.from_pretrained(
+            model_name, quantization_config=bnb_config
+        )
         model.eval()
     else:
-        model = transformers.AutoModelForMaskedLM.from_pretrained(model_name, _attn_implementation="eager")
+        model = transformers.AutoModelForMaskedLM.from_pretrained(
+            model_name, _attn_implementation="eager"
+        )
         model.cuda()
 
     lora_config = LoraConfig(
@@ -78,11 +82,11 @@ def create_adapted_model(
     model.eval()
 
     error_dict = None
-    if adapter_init == "loqer":
+    if adapter_init == "qera":
         if bnb_config is not None:
-            error_dict = replace_lora_weights_loqer_4bit(model, scale_dict=scale_dict)
+            error_dict = replace_lora_weights_qera_4bit(model, scale_dict=scale_dict)
         else:
-            error_dict = replace_lora_weight_loqer_kbit(
+            error_dict = replace_lora_weight_qera_kbit(
                 model,
                 scale_dict=scale_dict,
                 quant_type=quant_type,
@@ -91,7 +95,9 @@ def create_adapted_model(
             )
     elif adapter_init == "loftq":
         if bnb_config is not None:
-            error_dict = replace_lora_weights_loftq_4bit(model, num_iters=loftq_num_iters)
+            error_dict = replace_lora_weights_loftq_4bit(
+                model, num_iters=loftq_num_iters
+            )
         else:
             error_dict = replace_lora_weights_loftq_kbit(
                 model,
@@ -115,9 +121,11 @@ def create_adapted_model(
 
 
 @torch.no_grad()
-def profile_scales(model_ref, loqer_scaling_mode, dataloader, num_batches):
+def profile_scales(model_ref, qera_scaling_mode, dataloader, num_batches):
     layers_to_register_and_share = find_layers_to_register_scale_hook(model_ref)
-    profiler_factory = register_scale_hooks(model_ref, layers_to_register_and_share, loqer_scaling_mode, torch.float32)
+    profiler_factory = register_scale_hooks(
+        model_ref, layers_to_register_and_share, qera_scaling_mode, torch.float32
+    )
 
     model_ref.eval()
     model_ref.cuda()
@@ -143,17 +151,22 @@ def sweep(
     dataloader,
     num_batches,
 ):
-    LOQER_SCALING_MODE = "diag"
+    QERA_SCALING_MODE = "diag"
     MXINT_BLOCK_SIZE = 64
     if "roberta" in model_name:
         lora_target_modules = r"roberta\.encoder\.layer\.\d+\.(attention\.self\.(query|key|value)|(attention\.output\.dense)|(intermediate\.dense)|(output\.dense))"
     else:
         raise RuntimeError(f"Unsupported model: {model_name}")
 
-    model_ref = transformers.AutoModelForMaskedLM.from_pretrained(model_name, _attn_implementation="eager")
+    model_ref = transformers.AutoModelForMaskedLM.from_pretrained(
+        model_name, _attn_implementation="eager"
+    )
 
     scale_dict = profile_scales(
-        model_ref, loqer_scaling_mode=LOQER_SCALING_MODE, dataloader=dataloader, num_batches=num_batches
+        model_ref,
+        qera_scaling_mode=QERA_SCALING_MODE,
+        dataloader=dataloader,
+        num_batches=num_batches,
     )
 
     batches = []
@@ -188,9 +201,7 @@ def sweep(
 
                 for loftq_num_iter in loftq_num_iters_:
                     model_name_escape = model_name.replace("/", "_")
-                    run_name = (
-                        f"{model_name_escape}_rank_{rank}_bit_{bit}_adapter_{adapter_init}_loftq-{loftq_num_iter}-iter"
-                    )
+                    run_name = f"{model_name_escape}_rank_{rank}_bit_{bit}_adapter_{adapter_init}_loftq-{loftq_num_iter}-iter"
                     adapted_model, error_dict = create_adapted_model(
                         model_name=model_name,
                         lora_target_modules=lora_target_modules,
@@ -209,9 +220,16 @@ def sweep(
                         logits_ref=logits_ref,
                     )
 
-                    adp_name = adapter_init if adapter_init != "loftq" else f"{adapter_init} ({loftq_num_iter}-iter)"
+                    adp_name = (
+                        adapter_init
+                        if adapter_init != "loftq"
+                        else f"{adapter_init} ({loftq_num_iter}-iter)"
+                    )
                     output_error.append([rank, bit, adp_name, error, quant_type])
-                    if not (adapter_init == "loftq" and loftq_num_iter != max(loftq_num_iters)):
+                    if not (
+                        adapter_init == "loftq"
+                        and loftq_num_iter != max(loftq_num_iters)
+                    ):
                         approx_error[run_name] = error_dict
                     prog_bar.update(1)
 
@@ -224,7 +242,9 @@ if __name__ == "__main__":
     num_batches = 64
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
 
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.15)
+    data_collator = transformers.DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm=True, mlm_probability=0.15
+    )
     calibration_datamodule = get_data_module_for_peft(
         "wikitext2_mlm",
         tokenizer=tokenizer,
@@ -251,7 +271,7 @@ if __name__ == "__main__":
         quant_type="mxint",
         ranks=[16],
         bits=[3],
-        adapter_init_methods=["loftq", "loqer"],
+        adapter_init_methods=["loftq", "qera"],
         loftq_num_iters=[1, 2, 3, 4, 5],
         model_name=model_name,
         dataloader=calibration_dataloader,
@@ -260,7 +280,10 @@ if __name__ == "__main__":
 
     # print(tabulate(output_error, headers=["Rank", "Bits", "Adapter Init", "Output Error", "Quant Type"]))
 
-    df = pd.DataFrame(data=output_error, columns=["rank", "bits", "adapter_init", "output_error", "quant_type"])
+    df = pd.DataFrame(
+        data=output_error,
+        columns=["rank", "bits", "adapter_init", "output_error", "quant_type"],
+    )
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     df.to_pickle(f"roberta_output_error_{timestamp}.pkl")

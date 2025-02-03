@@ -18,7 +18,11 @@ from .fine_tuning import loftQ_parse_args, loftQ_fine_tuning
 from .statistic_profiler import register_scale_hooks, share_scales
 from .datasets import get_data_module
 from .evaluate import evaluate_perplexity, evaluate_harness_downstream
-from .models import find_layers_to_approximate, quantize_model, find_layers_to_register_scale_hook
+from .models import (
+    find_layers_to_approximate,
+    quantize_model,
+    find_layers_to_register_scale_hook,
+)
 from .approximate import compute_AB_and_approximation_error, attach_AB
 from .utils import create_device_map, get_all_device_mem_info
 
@@ -36,6 +40,7 @@ def _mse_threshold_emoji(mse: float) -> str:
     else:
         return "❌"
 
+
 def load_calibration_dataloader(
     tokenizer,
     calibration_set,
@@ -44,7 +49,7 @@ def load_calibration_dataloader(
     num_workers,
     perplexity_eval_batch_size,
     args: Namespace = None,
-    ):
+):
     """
     Load the calibration dataloader for language model perplexity evaluation.
 
@@ -71,61 +76,63 @@ def load_calibration_dataloader(
         args=args,
     )
 
-    if calibration_set == "gsm8k":                    
+    if calibration_set == "gsm8k":
         calibration_dataloader = DataLoader(
-            calibration_datamodule["train"], 
-            shuffle=True, 
-            collate_fn=transformers.default_data_collator, 
-            batch_size=perplexity_eval_batch_size
+            calibration_datamodule["train"],
+            shuffle=True,
+            collate_fn=transformers.default_data_collator,
+            batch_size=perplexity_eval_batch_size,
         )
-    else: 
+    else:
         "wikitext2, slim_pajama_6b"
-        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        data_collator = transformers.DataCollatorForLanguageModeling(
+            tokenizer=tokenizer, mlm=False
+        )
         calibration_dataloader = DataLoader(
             calibration_datamodule["train"],
             batch_size=perplexity_eval_batch_size,
             shuffle=False,
             num_workers=num_workers,
             collate_fn=data_collator,
-        )                                                                         
+        )
 
     return calibration_dataloader
 
 
 def calculate_AB_dict(
-    loqer_scaling_mode,
-    loqer_dtype,
+    qera_scaling_mode,
+    qera_dtype,
     unquantized_model,
-    loqer_scaling_mode_map,
+    qera_scaling_mode_map,
     calibration_dataloader,
     num_calibration_samples,
     perplexity_eval_batch_size,
-    loqer_sqrtm_implementation,
-    loqer_sqrtm_num_iters,
-    loqer_config,
+    qera_sqrtm_implementation,
+    qera_sqrtm_num_iters,
+    qera_config,
     AB_dict=None,
-    ):
+):
     """
-    Calculates the A and B dictionaries for Loqer-based quantization.
+    Calculates the A and B dictionaries for QERA-based quantization.
 
     Args:
-        unquantized_model (torch.nn.Module): The unquantized model. This model will be quantized by Loqer.
-        loqer_scaling_mode (str): The scaling mode for Loqer.
-        loqer_dtype (torch.dtype): The data type for Loqer.
-        loqer_scaling_mode_map (dict): The scaling mode map for Loqer.
+        unquantized_model (torch.nn.Module): The unquantized model. This model will be quantized by QERA.
+        qera_scaling_mode (str): The scaling mode for QERA.
+        qera_dtype (torch.dtype): The data type for QERA.
+        qera_scaling_mode_map (dict): The scaling mode map for QERA.
         calibration_dataloader (DataLoader): The calibration dataloader.
         num_calibration_samples (int): The number of calibration samples.
         perplexity_eval_batch_size (int): The batch size for perplexity evaluation.
-        loqer_sqrtm_implementation (str): The implementation for square root of matrix.
-        loqer_sqrtm_num_iters (int): The number of iterations for square root of matrix.
-        loqer_config: The configuration for Loqer.
+        qera_sqrtm_implementation (str): The implementation for square root of matrix.
+        qera_sqrtm_num_iters (int): The number of iterations for square root of matrix.
+        qera_config: The configuration for QERA.
         AB_dict (dict, optional): The A and B dictionaries. Defaults to None.
 
     Returns:
         tuple: A tuple containing the A and B dictionaries and the mean squared error dataframe.
     """
     model = unquantized_model
-    if loqer_scaling_mode == "identity":
+    if qera_scaling_mode == "identity":
         logger.info("🔊 Using identity scale (torch.eye)")
 
     logger.info("🚀 Running data calibration...")
@@ -133,29 +140,32 @@ def calculate_AB_dict(
     profiler_factory = register_scale_hooks(
         model,
         layers_to_register_and_share=layers_to_register_and_share,
-        mode=loqer_scaling_mode,
-        torch_dtype=loqer_dtype,
-        mode_map=loqer_scaling_mode_map,
+        mode=qera_scaling_mode,
+        torch_dtype=qera_dtype,
+        mode_map=qera_scaling_mode_map,
     )
-
 
     mem_info = get_all_device_mem_info()
     logger.info(f"Device memory before profiling starts: \n{pformat(mem_info)}")
     profile_outputs = evaluate_perplexity(
         model=model,
         eval_dataloader=calibration_dataloader,
-        num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
+        num_samples=(
+            num_calibration_samples
+            if qera_scaling_mode != "identity"
+            else perplexity_eval_batch_size
+        ),
         progress_bar=True,
         input_device=None,
         description="Calibrating",
     )
 
     profiler_factory.remove_all_hooks()
-    if loqer_scaling_mode == "rxx":
+    if qera_scaling_mode == "rxx":
         scale_dict = profiler_factory.get_scale_dict(
             progress_bar=True,
-            sqrtm_implementation=loqer_sqrtm_implementation,
-            sqrtm_num_iters=loqer_sqrtm_num_iters,
+            sqrtm_implementation=qera_sqrtm_implementation,
+            sqrtm_num_iters=qera_sqrtm_num_iters,
         )
     else:
         scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
@@ -166,40 +176,80 @@ def calculate_AB_dict(
     debug = False
     if debug:
         logger.info("🚀 Quantizing model...")
-        quantize_model(model, loqer_config)
+        quantize_model(model, qera_config)
 
         layers_to_approximate = find_layers_to_approximate(model)
-        logger.info("🚀 Loqer is enabled. Computing A & B...")
-        AB_dict, mse_df = compute_AB_and_approximation_error(model, layers_to_approximate, scale_dict, loqer_config)
+        logger.info("🚀 QERA is enabled. Computing A & B...")
+        AB_dict, mse_df = compute_AB_and_approximation_error(
+            model, layers_to_approximate, scale_dict, qera_config
+        )
         del scale_dict
         attach_AB(model, layers_to_approximate, AB_dict)
         mse_df_emoji = mse_df.copy()
         mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
-        logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
+        logger.info(
+            f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}"
+        )
 
         return AB_dict, mse_df
 
-    scale_dict_rename = {} # add .scale to the layer name
+    scale_dict_rename = {}  # add .scale to the layer name
     for layer_name, scale in scale_dict.items():
         scale_dict_rename[layer_name + ".scale"] = scale
     del scale_dict
 
-    return scale_dict_rename, 0.0 # name without .scale
+    return scale_dict_rename, 0.0  # name without .scale
 
 
-def pipeline_loqer():
+def pipeline_qera():
     parser = ArgumentParser()
     fine_tuning_group = parser.add_argument_group("Fine_Tuning Configuration")
     loftQ_parse_args(fine_tuning_group, use_existing_parser=True)
     parser.add_argument("config", type=str, help="Path to the configuration file")
-    parser.add_argument("--model-name", dest="model_name", type=str, help="Model name", default=None)
-    parser.add_argument("--loqer-dtype", dest="loqer_dtype", type=str, help="Loqer data type", default=None)
-    parser.add_argument("--eval-dtype", dest="eval_dtype", type=str, help="Evaluation data type", default=None)
-    parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default=None)
-    parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=None)
-    parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
-    parser.add_argument("--AB-dict", dest="AB_dict", type=str, help="AB dict", default=None)
-    parser.add_argument("--calibration-set", dest="calibration_set", type=str, help="Calibration set", default=None)
+    parser.add_argument(
+        "--model-name", dest="model_name", type=str, help="Model name", default=None
+    )
+    parser.add_argument(
+        "--qera-dtype",
+        dest="qera_dtype",
+        type=str,
+        help="QERA data type",
+        default=None,
+    )
+    parser.add_argument(
+        "--eval-dtype",
+        dest="eval_dtype",
+        type=str,
+        help="Evaluation data type",
+        default=None,
+    )
+    parser.add_argument(
+        "--device-map", dest="device_map", type=str, help="Device map", default=None
+    )
+    parser.add_argument(
+        "--num-workers",
+        dest="num_workers",
+        type=int,
+        help="Number of workers",
+        default=None,
+    )
+    parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        type=str,
+        help="Output directory",
+        default=None,
+    )
+    parser.add_argument(
+        "--AB-dict", dest="AB_dict", type=str, help="AB dict", default=None
+    )
+    parser.add_argument(
+        "--calibration-set",
+        dest="calibration_set",
+        type=str,
+        help="Calibration set",
+        default=None,
+    )
     parser.add_argument(
         "--num-calibration-samples",
         dest="num_calibration_samples",
@@ -229,43 +279,80 @@ def pipeline_loqer():
         default=None,
     )
     parser.add_argument(
-        "--lm-eval-tasks", dest="lm_eval_tasks", type=str, nargs="+", help="LM eval tasks", default=None
-    )
-    parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
-    )
-    parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=None
-    )
-    parser.add_argument(
-        "--disable-loqer", dest="disable_loqer", action="store_true", help="Disable Loqer", default=None
-    )
-    parser.add_argument(
-        "--loqer-scaling-mode",
-        dest="loqer_scaling_mode",
+        "--lm-eval-tasks",
+        dest="lm_eval_tasks",
         type=str,
-        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
+        nargs="+",
+        help="LM eval tasks",
         default=None,
-        choices=["diagonal", "diag", "rxx", "identity", "lqer", "mixed"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
-        "--loqer-sqrtm-implementation",
-        dest="loqer_sqrtm_implementation",
+        "--lm-eval-num-fewshot",
+        dest="lm_eval_num_fewshot",
+        type=int,
+        help="LM eval num fewshot",
+        default=None,
+    )
+    parser.add_argument(
+        "--lm-eval-batch-size",
+        dest="lm_eval_batch_size",
+        type=int,
+        help="LM eval batch size",
+        default=None,
+    )
+    parser.add_argument(
+        "--disable-qera",
+        dest="disable_qera",
+        action="store_true",
+        help="Disable QERA",
+        default=None,
+    )
+    parser.add_argument(
+        "--qera-scaling-mode",
+        dest="qera_scaling_mode",
         type=str,
-        help="Loqer sqrtm implementation, one of ['blocked', 'iterative'].",
+        help="QERA scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
+        default=None,
+        choices=[
+            "diagonal",
+            "diag",
+            "rxx",
+            "identity",
+            "lqer",
+            "mixed",
+        ],  # "diag" is alias of "diagonal"
+    )
+    parser.add_argument(
+        "--qera-sqrtm-implementation",
+        dest="qera_sqrtm_implementation",
+        type=str,
+        help="QERA sqrtm implementation, one of ['blocked', 'iterative'].",
         default=None,
         choices=["blocked", "iterative"],
     )
     parser.add_argument(
-        "--loqer-sqrtm-num-iters",
-        dest="loqer_sqrtm_num_iters",
+        "--qera-sqrtm-num-iters",
+        dest="qera_sqrtm_num_iters",
         type=int,
         help="Number of iterations for iterative sqrtm",
         default=None,
     )
-    parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
-    parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
-    parser.add_argument("--overwrite-output-dir", "-ow", dest="overwrite_output_dir", action="store_true", default=None)
+    parser.add_argument(
+        "--disable-perplexity-eval",
+        dest="disable_perplexity_eval",
+        action="store_true",
+        default=None,
+    )
+    parser.add_argument(
+        "--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None
+    )
+    parser.add_argument(
+        "--overwrite-output-dir",
+        "-ow",
+        dest="overwrite_output_dir",
+        action="store_true",
+        default=None,
+    )
 
     args = parser.parse_args()
     args = vars(args)
@@ -280,7 +367,7 @@ def pipeline_loqer():
             config[entry] = value
             override_args[entry] = value
 
-    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments... 
+    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments...
     # (because there are many default values in the command line arguments)
     if "fine_tuning_config" in config:
         fine_tuning_config = config.pop("fine_tuning_config")
@@ -290,17 +377,18 @@ def pipeline_loqer():
             override_args.pop(entry, None)
     fine_tuning_args = Namespace(**args)
 
-
     logger.info(f"Configuration: \n{pformat(config, indent=4)}")
     logger.info(f"Fine Turning Configuration: \n{pformat(args, indent=4)}")
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
 
     model_name = config["model_name"]
-    loqer_dtype = getattr(torch, config["loqer_dtype"])
+    qera_dtype = getattr(torch, config["qera_dtype"])
     eval_dtype = getattr(torch, config["eval_dtype"])
     device_map = config["device_map"]
     num_workers = config["num_workers"]
-    output_dir = Path(config["output_dir"]) if config["output_dir"] is not None else None
+    output_dir = (
+        Path(config["output_dir"]) if config["output_dir"] is not None else None
+    )
     AB_dict = config["AB_dict"]
     calibration_set = config["calibration_set"]
     num_calibration_samples = config["num_calibration_samples"]
@@ -311,14 +399,14 @@ def pipeline_loqer():
     lm_eval_num_fewshot = config["lm_eval_num_fewshot"]
     lm_eval_batch_size = config["lm_eval_batch_size"]
 
-    disable_loqer = config["disable_loqer"]
-    loqer_scaling_mode = config["loqer_scaling_mode"]
-    loqer_sqrtm_implementation = config["loqer_sqrtm_implementation"]
-    loqer_sqrtm_num_iters = config["loqer_sqrtm_num_iters"]
-    loqer_config = config["loqer_config"]
+    disable_qera = config["disable_qera"]
+    qera_scaling_mode = config["qera_scaling_mode"]
+    qera_sqrtm_implementation = config["qera_sqrtm_implementation"]
+    qera_sqrtm_num_iters = config["qera_sqrtm_num_iters"]
+    qera_config = config["qera_config"]
     disable_perplexity_eval = config["disable_perplexity_eval"]
     disable_lm_eval = config["disable_lm_eval"]
-    loqer_scaling_mode_map = config["loqer_scaling_mode_map"]
+    qera_scaling_mode_map = config["qera_scaling_mode_map"]
     overwrite_output_dir = config["overwrite_output_dir"]
 
     # check output directory
@@ -335,45 +423,55 @@ def pipeline_loqer():
                 AB_dict = AB_dict_in_output_dir
                 logger.warning(f"🔊 Using AB_dict in the output directory: {AB_dict}")
     else:
-        if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
+        if (
+            output_dir is not None
+            and output_dir.is_dir()
+            and len(list(output_dir.iterdir())) > 0
+        ):
             raise ValueError(f"Output directory {output_dir} is not empty")
 
     # sqrtm_implementation
-    if loqer_scaling_mode in ["rxx", "mixed"]:
-        if loqer_sqrtm_implementation == "blocked":
+    if qera_scaling_mode in ["rxx", "mixed"]:
+        if qera_sqrtm_implementation == "blocked":
             # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
-            logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
-        elif loqer_sqrtm_implementation == "iterative":
+            logger.info(
+                "🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported"
+            )
+        elif qera_sqrtm_implementation == "iterative":
             # refer to https://link.springer.com/article/10.1023/A:1019150005407
-            logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
+            logger.info(
+                f"🔊 Using iterative sqrtm implementation (number of iterations={qera_sqrtm_num_iters})"
+            )
         else:
-            raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
+            raise ValueError(
+                f"Unknown sqrtm_implementation: {qera_sqrtm_implementation}"
+            )
 
     # ====================================================================
     # Load the base unquantised model and tokenizer for calibration
     # ====================================================================
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_name,
-        use_fast=not args['use_slow_tokenizer'],
-        trust_remote_code=args['trust_remote_code'],
-        )
-    # TODO: Could I use this tokenizer padding for all datasets? 
+        use_fast=not args["use_slow_tokenizer"],
+        trust_remote_code=args["trust_remote_code"],
+    )
+    # TODO: Could I use this tokenizer padding for all datasets?
     tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
     tokenizer.padding_side = "left"  # Allow batched inference
     tokenizer.truncation_side = "left"
 
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+        model_name, torch_dtype=qera_dtype, _attn_implementation="eager"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
         model.tie_weights()
-    
+
     device_map = create_device_map(model, device_map=device_map)
     logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
 
-    if not disable_loqer:
+    if not disable_qera:
         if AB_dict is None:
             calibration_dataloader = load_calibration_dataloader(
                 tokenizer=tokenizer,
@@ -382,39 +480,49 @@ def pipeline_loqer():
                 num_calibration_samples=num_calibration_samples,
                 num_workers=num_workers,
                 perplexity_eval_batch_size=perplexity_eval_batch_size,
-                args=fine_tuning_args
+                args=fine_tuning_args,
             )
             AB_dict, mse_df = calculate_AB_dict(
-                loqer_scaling_mode=loqer_scaling_mode,
-                loqer_dtype=loqer_dtype,
+                qera_scaling_mode=qera_scaling_mode,
+                qera_dtype=qera_dtype,
                 unquantized_model=model,
-                loqer_scaling_mode_map=loqer_scaling_mode_map,
+                qera_scaling_mode_map=qera_scaling_mode_map,
                 calibration_dataloader=calibration_dataloader,
                 num_calibration_samples=num_calibration_samples,
                 perplexity_eval_batch_size=perplexity_eval_batch_size,
-                loqer_sqrtm_implementation=loqer_sqrtm_implementation,
-                loqer_sqrtm_num_iters=loqer_sqrtm_num_iters,
-                loqer_config=loqer_config,
+                qera_sqrtm_implementation=qera_sqrtm_implementation,
+                qera_sqrtm_num_iters=qera_sqrtm_num_iters,
+                qera_config=qera_config,
                 AB_dict=AB_dict,
             )
         else:
             AB_dict = torch.load(AB_dict)
             mse_df = None
     else:
-        logger.warning("⚠️ Loqer is disabled, skipping layer approximation")
+        logger.warning("⚠️ QERA is disabled, skipping layer approximation")
 
     # ====================================================================
     # Fine-tuning
     # ====================================================================
-    fine_tuning_model_name = fine_tuning_args.model_name_or_path # Note: This model name could be different from the loqer original model name because it could contains loftq initilization subfolder.
+    fine_tuning_model_name = (
+        fine_tuning_args.model_name_or_path
+    )  # Note: This model name could be different from the qera original model name because it could contains loftq initilization subfolder.
     config = transformers.AutoConfig.from_pretrained(
         fine_tuning_model_name,
-        trust_remote_code=args['trust_remote_code'],
+        trust_remote_code=args["trust_remote_code"],
     )
-    # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
-    if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat' and loqer_config['default-1']['w_quantizer']['name'] != 'bfloat':
-        if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
-            raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
+    # Overwrite the unquantized model with the quantized model for Peft training (QERA quantized model is not competible with Peft)
+    if (
+        qera_config["default-1"]["w_quantizer"]["name"] != "normalfloat"
+        and qera_config["default-1"]["w_quantizer"]["name"] != "bfloat"
+    ):
+        if (
+            qera_config["default-1"]["w_quantizer"]["width"] != 4
+            and qera_config["default-1"]["w_quantizer"]["num_bits"] != 4
+        ):
+            raise ValueError(
+                "Fine-tuning only supports normalfloat4 quantizer and floating point4."
+            )
     model = transformers.AutoModelForCausalLM.from_pretrained(
         fine_tuning_model_name,
         from_tf=bool(".ckpt" in fine_tuning_model_name),
@@ -428,10 +536,14 @@ def pipeline_loqer():
         ),
     )
     logger.info("🚀 Fine-tuning...")
-    model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
+    model = loftQ_fine_tuning(
+        fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict
+    )
 
     if not disable_perplexity_eval:
-        data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+        data_collator = transformers.DataCollatorForLanguageModeling(
+            tokenizer=tokenizer, mlm=False
+        )
         logger.info("🚀 Evaluating perplexity...")
         eval_datamodule = get_data_module(
             name=perplexity_evaluation_set,
@@ -459,10 +571,14 @@ def pipeline_loqer():
             description="Evaluating",
         )
 
-        if disable_loqer:
-            logger.info(f"Perplexity after quantization (no LoQER): {ppl_results['perplexity']:.4f}")
+        if disable_qera:
+            logger.info(
+                f"Perplexity after quantization (no QERA): {ppl_results['perplexity']:.4f}"
+            )
         else:
-            logger.info(f"Perplexity after approximation: {ppl_results['perplexity']:.4f}")
+            logger.info(
+                f"Perplexity after approximation: {ppl_results['perplexity']:.4f}"
+            )
 
     if not disable_lm_eval:
         logger.info("🚀 Evaluating lm-eval downstream tasks...")
@@ -482,7 +598,7 @@ def pipeline_loqer():
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if not disable_loqer and mse_df is not None:
+        if not disable_qera and mse_df is not None:
             # save approximation results
             mse_df.to_csv(output_dir / "approximation_error.csv", index=False)
             # save AB_dict
@@ -508,10 +624,34 @@ def pipeline_loqer():
 def pipeline_fp16():
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
-    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
-    parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default="auto-balanced")
-    parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
-    parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
+    parser.add_argument(
+        "--dtype",
+        dest="dtype",
+        type=str,
+        help="Evaluation data type",
+        default="float16",
+    )
+    parser.add_argument(
+        "--device-map",
+        dest="device_map",
+        type=str,
+        help="Device map",
+        default="auto-balanced",
+    )
+    parser.add_argument(
+        "--num-workers",
+        dest="num_workers",
+        type=int,
+        help="Number of workers",
+        default=8,
+    )
+    parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        type=str,
+        help="Output directory",
+        default=None,
+    )
     parser.add_argument(
         "--perplexity-eval-set",
         dest="perplexity_eval_set",
@@ -550,13 +690,25 @@ def pipeline_fp16():
         ],
     )
     parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=0
+        "--lm-eval-num-fewshot",
+        dest="lm_eval_num_fewshot",
+        type=int,
+        help="LM eval num fewshot",
+        default=0,
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
+        "--lm-eval-batch-size",
+        dest="lm_eval_batch_size",
+        type=int,
+        help="LM eval batch size",
+        default=16,
     )
-    parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
-    parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
+    parser.add_argument(
+        "--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true"
+    )
+    parser.add_argument(
+        "--disable-lm-eval", dest="disable_lm_eval", action="store_true"
+    )
 
     args = parser.parse_args()
 
@@ -577,14 +729,22 @@ def pipeline_fp16():
     disable_lm_eval = args.disable_lm_eval
 
     # check output directory
-    if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
+    if (
+        output_dir is not None
+        and output_dir.is_dir()
+        and len(list(output_dir.iterdir())) > 0
+    ):
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=dtype
+    )
     model.eval()
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    data_collator = transformers.DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm=False
+    )
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -604,7 +764,9 @@ def pipeline_fp16():
             collate_fn=data_collator,
         )
 
-        model = dispatch_model(model, device_map=create_device_map(model, device_map=device_map))
+        model = dispatch_model(
+            model, device_map=create_device_map(model, device_map=device_map)
+        )
         perplexity_results = evaluate_perplexity(
             model=model,
             eval_dataloader=perplexity_dataloader,
@@ -649,12 +811,36 @@ def pipeline_fp16():
 def pipeline_q_baseline():
     from transformers import BitsAndBytesConfig, AwqConfig, GPTQConfig
     from auto_gptq import exllama_set_max_input_length
+
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
-    parser.add_argument("--load-in-4bit", dest="load_in_4bit", action="store_true", help="Load in 4-bit model")
-    parser.add_argument("--dtype", dest="dtype", type=str, help="Evaluation data type", default="float16")
-    parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=8)
-    parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
+    parser.add_argument(
+        "--load-in-4bit",
+        dest="load_in_4bit",
+        action="store_true",
+        help="Load in 4-bit model",
+    )
+    parser.add_argument(
+        "--dtype",
+        dest="dtype",
+        type=str,
+        help="Evaluation data type",
+        default="float16",
+    )
+    parser.add_argument(
+        "--num-workers",
+        dest="num_workers",
+        type=int,
+        help="Number of workers",
+        default=8,
+    )
+    parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        type=str,
+        help="Output directory",
+        default=None,
+    )
     parser.add_argument(
         "--perplexity-eval-set",
         dest="perplexity_eval_set",
@@ -693,13 +879,25 @@ def pipeline_q_baseline():
         ],
     )
     parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=0
+        "--lm-eval-num-fewshot",
+        dest="lm_eval_num_fewshot",
+        type=int,
+        help="LM eval num fewshot",
+        default=0,
     )
     parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=16
+        "--lm-eval-batch-size",
+        dest="lm_eval_batch_size",
+        type=int,
+        help="LM eval batch size",
+        default=16,
     )
-    parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true")
-    parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true")
+    parser.add_argument(
+        "--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true"
+    )
+    parser.add_argument(
+        "--disable-lm-eval", dest="disable_lm_eval", action="store_true"
+    )
 
     args = parser.parse_args()
 
@@ -720,17 +918,25 @@ def pipeline_q_baseline():
     disable_lm_eval = args.disable_lm_eval
 
     # check output directory
-    if output_dir is not None and output_dir.is_dir() and len(list(output_dir.iterdir())) > 0:
+    if (
+        output_dir is not None
+        and output_dir.is_dir()
+        and len(list(output_dir.iterdir())) > 0
+    ):
         raise ValueError(f"Output directory {output_dir} is not empty")
 
     # Load model and tokenizer
     if load_in_4bit:
-        quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16)
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16
+        )
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_name, torch_dtype=dtype, quantization_config=quantization_config
         )
     else:
-        model = transformers.AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, device_map={"": 0})
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            model_name, torch_dtype=dtype, device_map={"": 0}
+        )
     model.eval()
 
     if load_in_4bit:
@@ -744,11 +950,15 @@ def pipeline_q_baseline():
         elif isinstance(model.config.quantization_config, dict):
             q_method = model.config.quantization_config["quant_method"]
         else:
-            raise ValueError(f"Unknown quantization method: {model.config.quantization_config}")
+            raise ValueError(
+                f"Unknown quantization method: {model.config.quantization_config}"
+            )
 
     logger.info(f"🔊 Quantization method: {q_method}")
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    data_collator = transformers.DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm=False
+    )
 
     if not disable_perplexity_eval:
         logger.info("🚀 Evaluating perplexity...")
@@ -813,7 +1023,9 @@ def _check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
     Check if the chunk_id is valid for the given model and layers_per_chunk.
     """
     with init_empty_weights():
-        config = transformers.AutoConfig.from_pretrained(model_name, _attn_implementation="eager")
+        config = transformers.AutoConfig.from_pretrained(
+            model_name, _attn_implementation="eager"
+        )
         model = transformers.AutoModelForCausalLM.from_config(config)
         model_cls = model.__class__
         model = model_cls(config)
@@ -823,8 +1035,12 @@ def _check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
 
     if chunk_id is not None:
         if chunk_id > num_chunks:
-            logger.error(f"❌ chunk_id (={chunk_id}) must be smaller than the number of chunks ({num_chunks})")
-            raise RuntimeError(f"chunk_id (={chunk_id}) must be smaller than the number of chunks ({num_chunks})")
+            logger.error(
+                f"❌ chunk_id (={chunk_id}) must be smaller than the number of chunks ({num_chunks})"
+            )
+            raise RuntimeError(
+                f"chunk_id (={chunk_id}) must be smaller than the number of chunks ({num_chunks})"
+            )
     else:
         logger.info(f"Model name: {model_name}")
         logger.info(f"Layers per chunk: {layers_per_chunk}")
@@ -833,7 +1049,9 @@ def _check_chunk_id(model_name, layers_per_chunk, chunk_id=None):
     return num_chunks
 
 
-def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag=None) -> set[str]:
+def _verify_AB_dict_chunks(
+    AB_dict_dir: Path, num_chunks: int, current_chunk_tag=None
+) -> set[str]:
     chunks_to_check = [f"{i}-of-{num_chunks-1}.pt" for i in range(num_chunks)]
     if current_chunk_tag is not None:
         chunks_to_check.remove(current_chunk_tag + ".pt")
@@ -847,40 +1065,41 @@ def _verify_AB_dict_chunks(AB_dict_dir: Path, num_chunks: int, current_chunk_tag
 
 
 def calculate_chunk_AB_Dict(
-        model_name, 
-        loqer_dtype, 
-        num_chunks, 
-        disable_loqer, 
-        loqer_scaling_mode, 
-        loqer_sqrtm_implementation, 
-        loqer_sqrtm_num_iters, 
-        loqer_config,
-        loqer_scaling_mode_map,
-        calibration_set,
-        perplexity_max_seq_length,
-        num_calibration_samples,
-        num_workers,
-        perplexity_eval_batch_size,
-        AB_dict_dir,
-        output_dir,
-        chunk_tag,
-        missing_chunks,
-        config,
-        device_map,
-        chunk_id=None):
+    model_name,
+    qera_dtype,
+    num_chunks,
+    disable_qera,
+    qera_scaling_mode,
+    qera_sqrtm_implementation,
+    qera_sqrtm_num_iters,
+    qera_config,
+    qera_scaling_mode_map,
+    calibration_set,
+    perplexity_max_seq_length,
+    num_calibration_samples,
+    num_workers,
+    perplexity_eval_batch_size,
+    AB_dict_dir,
+    output_dir,
+    chunk_tag,
+    missing_chunks,
+    config,
+    device_map,
+    chunk_id=None,
+):
     """
-    Calculates the A and B dictionaries for a given chunk in the LoQER pipeline.
+    Calculates the A and B dictionaries for a given chunk in the QERA pipeline.
 
     Args:
         model_name (str): The name or path of the pre-trained model. This function loads the model and tokenizer.
-        loqer_dtype (torch.dtype): The data type to use for LoQER calculations.
+        qera_dtype (torch.dtype): The data type to use for QERA calculations.
         num_chunks (int): The total number of chunks in the pipeline.
-        disable_loqer (bool): Whether to disable LoQER for the chunked pipeline.
-        loqer_scaling_mode (str): The scaling mode to use for LoQER. Should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer'].
-        loqer_sqrtm_implementation (str): The implementation to use for calculating the square root of a matrix. Should be one of ['blocked', 'iterative'].
-        loqer_sqrtm_num_iters (int): The number of iterations to use for the iterative square root calculation.
-        loqer_config (dict): The configuration for LoQER.
-        loqer_scaling_mode_map (dict): The mapping of scaling modes to their corresponding implementation modes.
+        disable_qera (bool): Whether to disable QERA for the chunked pipeline.
+        qera_scaling_mode (str): The scaling mode to use for QERA. Should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer'].
+        qera_sqrtm_implementation (str): The implementation to use for calculating the square root of a matrix. Should be one of ['blocked', 'iterative'].
+        qera_sqrtm_num_iters (int): The number of iterations to use for the iterative square root calculation.
+        qera_config (dict): The configuration for QERA.
+        qera_scaling_mode_map (dict): The mapping of scaling modes to their corresponding implementation modes.
         calibration_set (str): The name of the calibration dataset.
         perplexity_max_seq_length (int): The maximum sequence length for perplexity evaluation.
         num_calibration_samples (int): The number of calibration samples.
@@ -895,33 +1114,48 @@ def calculate_chunk_AB_Dict(
         chunk_id (int, optional): The ID of the current chunk. Defaults to None.
 
     Raises:
-        ValueError: If disable_loqer is True for the chunked pipeline or if loqer_scaling_mode is not one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer'].
+        ValueError: If disable_qera is True for the chunked pipeline or if qera_scaling_mode is not one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer'].
 
     Returns:
         None (saves the A and B dictionaries to the output directory).
     """
-    # only allows disable_loqer=False and loqer_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
-    if disable_loqer:
-        raise ValueError("disable_loqer=True is not supported for chunked pipeline.")
+    # only allows disable_qera=False and qera_scaling_mode in ["diag", "diagonal", "rxx", "mixed", "identity"]
+    if disable_qera:
+        raise ValueError("disable_qera=True is not supported for chunked pipeline.")
     else:
-        if loqer_scaling_mode not in ["diag", "diagonal", "rxx", "mixed", "identity", "lqer"]:
-            raise ValueError("loqer_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']")
+        if qera_scaling_mode not in [
+            "diag",
+            "diagonal",
+            "rxx",
+            "mixed",
+            "identity",
+            "lqer",
+        ]:
+            raise ValueError(
+                "qera_scaling_mode should be one of ['diagonal', 'diag', 'rxx', 'mixed', 'identity', 'lqer']"
+            )
 
     # sqrtm_implementation
-    if loqer_scaling_mode in ["rxx", "mixed"]:
-        if loqer_sqrtm_implementation == "blocked":
+    if qera_scaling_mode in ["rxx", "mixed"]:
+        if qera_sqrtm_implementation == "blocked":
             # refer to https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.sqrtm.html
-            logger.info("🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported")
-        elif loqer_sqrtm_implementation == "iterative":
+            logger.info(
+                "🔊 Using blocked sqrtm implementation. Only CPU + Scipy is supported"
+            )
+        elif qera_sqrtm_implementation == "iterative":
             # refer to https://link.springer.com/article/10.1023/A:1019150005407
-            logger.info(f"🔊 Using iterative sqrtm implementation (number of iterations={loqer_sqrtm_num_iters})")
+            logger.info(
+                f"🔊 Using iterative sqrtm implementation (number of iterations={qera_sqrtm_num_iters})"
+            )
         else:
-            raise ValueError(f"Unknown sqrtm_implementation: {loqer_sqrtm_implementation}")
+            raise ValueError(
+                f"Unknown sqrtm_implementation: {qera_sqrtm_implementation}"
+            )
 
     # Load model and tokenizer
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     model = transformers.AutoModelForCausalLM.from_pretrained(
-        model_name, torch_dtype=loqer_dtype, _attn_implementation="eager"
+        model_name, torch_dtype=qera_dtype, _attn_implementation="eager"
     )
     model.eval()
     if hasattr(model, "tie_weights"):
@@ -929,7 +1163,9 @@ def calculate_chunk_AB_Dict(
     device_map = create_device_map(model, device_map=device_map)
     logger.info(f"Device map: {device_map}")
     model = dispatch_model(model, device_map)
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    data_collator = transformers.DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm=False
+    )
 
     # solve chunk_id
     layers_to_register_and_share = find_layers_to_register_scale_hook(model)
@@ -941,9 +1177,9 @@ def calculate_chunk_AB_Dict(
     profiler_factory = register_scale_hooks(
         model,
         layers_to_register_and_share=layers_to_register_and_share,
-        mode=loqer_scaling_mode,
-        torch_dtype=loqer_dtype,
-        mode_map=loqer_scaling_mode_map,
+        mode=qera_scaling_mode,
+        torch_dtype=qera_dtype,
+        mode_map=qera_scaling_mode_map,
     )
 
     calibration_datamodule = get_data_module(
@@ -968,18 +1204,22 @@ def calculate_chunk_AB_Dict(
     profile_outputs = evaluate_perplexity(
         model=model,
         eval_dataloader=calibration_dataloader,
-        num_samples=num_calibration_samples if loqer_scaling_mode != "identity" else perplexity_eval_batch_size,
+        num_samples=(
+            num_calibration_samples
+            if qera_scaling_mode != "identity"
+            else perplexity_eval_batch_size
+        ),
         progress_bar=True,
         input_device=None,
         description="Calibrating",
     )
 
     profiler_factory.remove_all_hooks()
-    if loqer_scaling_mode in ["rxx", "mixed"]:
+    if qera_scaling_mode in ["rxx", "mixed"]:
         scale_dict = profiler_factory.get_scale_dict(
             progress_bar=True,
-            sqrtm_implementation=loqer_sqrtm_implementation,
-            sqrtm_num_iters=loqer_sqrtm_num_iters,
+            sqrtm_implementation=qera_sqrtm_implementation,
+            sqrtm_num_iters=qera_sqrtm_num_iters,
         )
     else:
         scale_dict = profiler_factory.get_scale_dict(progress_bar=True)
@@ -988,18 +1228,22 @@ def calculate_chunk_AB_Dict(
     logger.info(f"Perplexity after profiling: {profile_outputs['perplexity']:.4f}")
 
     logger.info("🚀 Quantizing model...")
-    quantize_model(model, loqer_config)
+    quantize_model(model, qera_config)
 
-    logger.info("🚀 Loqer is enabled. Computing A & B...")
+    logger.info("🚀 QERA is enabled. Computing A & B...")
     layers_to_approximate = find_layers_to_approximate(model)
-    layers_to_approximate = list(filter(lambda x: x in scale_dict, layers_to_approximate))
+    layers_to_approximate = list(
+        filter(lambda x: x in scale_dict, layers_to_approximate)
+    )
     AB_dict, mse_df = compute_AB_and_approximation_error(
-        model, layers_to_approximate, scale_dict, loqer_config, move_model_back=False
+        model, layers_to_approximate, scale_dict, qera_config, move_model_back=False
     )
     del scale_dict
     mse_df_emoji = mse_df.copy()
     mse_df_emoji.loc[:, "mse?"] = mse_df["mse"].apply(_mse_threshold_emoji)
-    logger.info(f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}")
+    logger.info(
+        f"Approximation error (mean squared error): \n{mse_df_emoji.to_markdown()}"
+    )
 
     missing_chunks = _verify_AB_dict_chunks(
         AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=chunk_tag
@@ -1020,19 +1264,53 @@ def calculate_chunk_AB_Dict(
         yaml.dump(config, f)
 
 
-def pipeline_loqer_chunked():
+def pipeline_qera_chunked():
     parser = ArgumentParser()
     fine_tuning_group = parser.add_argument_group("Fine_Tuning Configuration")
     loftQ_parse_args(fine_tuning_group, use_existing_parser=True)
     parser.add_argument("config", type=str, help="Path to the configuration file")
-    parser.add_argument("--model-name", dest="model_name", type=str, help="Model name", default=None)
-    parser.add_argument("--loqer-dtype", dest="loqer_dtype", type=str, help="Loqer data type", default=None)
-    parser.add_argument("--eval-dtype", dest="eval_dtype", type=str, help="Evaluation data type", default=None)
-    parser.add_argument("--device-map", dest="device_map", type=str, help="Device map", default=None)
-    parser.add_argument("--num-workers", dest="num_workers", type=int, help="Number of workers", default=None)
-    parser.add_argument("--output-dir", dest="output_dir", type=str, help="Output directory", default=None)
+    parser.add_argument(
+        "--model-name", dest="model_name", type=str, help="Model name", default=None
+    )
+    parser.add_argument(
+        "--qera-dtype",
+        dest="qera_dtype",
+        type=str,
+        help="QERA data type",
+        default=None,
+    )
+    parser.add_argument(
+        "--eval-dtype",
+        dest="eval_dtype",
+        type=str,
+        help="Evaluation data type",
+        default=None,
+    )
+    parser.add_argument(
+        "--device-map", dest="device_map", type=str, help="Device map", default=None
+    )
+    parser.add_argument(
+        "--num-workers",
+        dest="num_workers",
+        type=int,
+        help="Number of workers",
+        default=None,
+    )
+    parser.add_argument(
+        "--output-dir",
+        dest="output_dir",
+        type=str,
+        help="Output directory",
+        default=None,
+    )
     # parser.add_argument("--AB-dict", dest="AB_dict", type=str, help="AB dict", default=None)
-    parser.add_argument("--calibration-set", dest="calibration_set", type=str, help="Calibration set", default=None)
+    parser.add_argument(
+        "--calibration-set",
+        dest="calibration_set",
+        type=str,
+        help="Calibration set",
+        default=None,
+    )
     parser.add_argument(
         "--num-calibration-samples",
         dest="num_calibration_samples",
@@ -1062,44 +1340,83 @@ def pipeline_loqer_chunked():
         default=None,
     )
     parser.add_argument(
-        "--lm-eval-tasks", dest="lm_eval_tasks", type=str, nargs="+", help="LM eval tasks", default=None
-    )
-    parser.add_argument(
-        "--lm-eval-num-fewshot", dest="lm_eval_num_fewshot", type=int, help="LM eval num fewshot", default=None
-    )
-    parser.add_argument(
-        "--lm-eval-batch-size", dest="lm_eval_batch_size", type=int, help="LM eval batch size", default=None
-    )
-    parser.add_argument(
-        "--disable-loqer", dest="disable_loqer", action="store_true", help="Disable Loqer", default=None
-    )
-    parser.add_argument(
-        "--loqer-scaling-mode",
-        dest="loqer_scaling_mode",
+        "--lm-eval-tasks",
+        dest="lm_eval_tasks",
         type=str,
-        help="Loqer scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed', 'lqer'].",
+        nargs="+",
+        help="LM eval tasks",
         default=None,
-        choices=["diagonal", "diag", "rxx", "identity", "mixed", "lqer"],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
-        "--loqer-sqrtm-implementation",
-        dest="loqer_sqrtm_implementation",
+        "--lm-eval-num-fewshot",
+        dest="lm_eval_num_fewshot",
+        type=int,
+        help="LM eval num fewshot",
+        default=None,
+    )
+    parser.add_argument(
+        "--lm-eval-batch-size",
+        dest="lm_eval_batch_size",
+        type=int,
+        help="LM eval batch size",
+        default=None,
+    )
+    parser.add_argument(
+        "--disable-qera",
+        dest="disable_qera",
+        action="store_true",
+        help="Disable QERA",
+        default=None,
+    )
+    parser.add_argument(
+        "--qera-scaling-mode",
+        dest="qera_scaling_mode",
         type=str,
-        help="Loqer sqrtm implementation, one of ['blocked', 'iterative'].",
+        help="QERA scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed', 'lqer'].",
+        default=None,
+        choices=[
+            "diagonal",
+            "diag",
+            "rxx",
+            "identity",
+            "mixed",
+            "lqer",
+        ],  # "diag" is alias of "diagonal"
+    )
+    parser.add_argument(
+        "--qera-sqrtm-implementation",
+        dest="qera_sqrtm_implementation",
+        type=str,
+        help="QERA sqrtm implementation, one of ['blocked', 'iterative'].",
         default=None,
         choices=["blocked", "iterative"],
     )
     parser.add_argument(
-        "--loqer-sqrtm-num-iters",
-        dest="loqer_sqrtm_num_iters",
+        "--qera-sqrtm-num-iters",
+        dest="qera_sqrtm_num_iters",
         type=int,
         help="Number of iterations for iterative sqrtm",
         default=None,
     )
-    parser.add_argument("--disable-perplexity-eval", dest="disable_perplexity_eval", action="store_true", default=None)
-    parser.add_argument("--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None)
-    parser.add_argument("--layers-per-chunk", dest="layers_per_chunk", type=int, help="Layers per chunk", default=None)
-    parser.add_argument("--chunk-id", dest="chunk_id", type=int, help="Chunk ID", default=None)
+    parser.add_argument(
+        "--disable-perplexity-eval",
+        dest="disable_perplexity_eval",
+        action="store_true",
+        default=None,
+    )
+    parser.add_argument(
+        "--disable-lm-eval", dest="disable_lm_eval", action="store_true", default=None
+    )
+    parser.add_argument(
+        "--layers-per-chunk",
+        dest="layers_per_chunk",
+        type=int,
+        help="Layers per chunk",
+        default=None,
+    )
+    parser.add_argument(
+        "--chunk-id", dest="chunk_id", type=int, help="Chunk ID", default=None
+    )
 
     args = parser.parse_args()
     args = vars(args)
@@ -1114,7 +1431,7 @@ def pipeline_loqer_chunked():
             config[entry] = value
             override_args[entry] = value
 
-    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments... 
+    # NOTE: Unlike above, fine-tuning yaml config file has higher priority than command line arguments...
     # (because there are many default values in the command line arguments)
     if "fine_tuning_config" in config:
         fine_tuning_config = config.pop("fine_tuning_config")
@@ -1127,11 +1444,13 @@ def pipeline_loqer_chunked():
     logger.info(f"Override arguments: \n{pformat(override_args, indent=4)}")
 
     model_name = config["model_name"]
-    loqer_dtype = getattr(torch, config["loqer_dtype"])
+    qera_dtype = getattr(torch, config["qera_dtype"])
     eval_dtype = getattr(torch, config["eval_dtype"])
     device_map = config["device_map"]
     num_workers = config["num_workers"]
-    output_dir = Path(config["output_dir"]) if config["output_dir"] is not None else None
+    output_dir = (
+        Path(config["output_dir"]) if config["output_dir"] is not None else None
+    )
     calibration_set = config["calibration_set"]
     num_calibration_samples = config["num_calibration_samples"]
     perplexity_evaluation_set = config["perplexity_eval_set"]
@@ -1141,14 +1460,14 @@ def pipeline_loqer_chunked():
     lm_eval_num_fewshot = config["lm_eval_num_fewshot"]
     lm_eval_batch_size = config["lm_eval_batch_size"]
 
-    disable_loqer = config["disable_loqer"]
-    loqer_scaling_mode = config["loqer_scaling_mode"]
-    loqer_sqrtm_implementation = config["loqer_sqrtm_implementation"]
-    loqer_sqrtm_num_iters = config["loqer_sqrtm_num_iters"]
-    loqer_config = config["loqer_config"]
+    disable_qera = config["disable_qera"]
+    qera_scaling_mode = config["qera_scaling_mode"]
+    qera_sqrtm_implementation = config["qera_sqrtm_implementation"]
+    qera_sqrtm_num_iters = config["qera_sqrtm_num_iters"]
+    qera_config = config["qera_config"]
     disable_perplexity_eval = config["disable_perplexity_eval"]
     disable_lm_eval = config["disable_lm_eval"]
-    loqer_scaling_mode_map = config["loqer_scaling_mode_map"]
+    qera_scaling_mode_map = config["qera_scaling_mode_map"]
 
     layers_per_chunk = config["layers_per_chunk"]
     chunk_id = config["chunk_id"]
@@ -1160,22 +1479,26 @@ def pipeline_loqer_chunked():
 
     # check output directory
     AB_dict_dir = output_dir.joinpath("AB_dict")
-    missing_chunks = _verify_AB_dict_chunks(AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None)
-    assert not (len(missing_chunks) > 0 and chunk_id is None), f"Missing chunks: {missing_chunks}"
+    missing_chunks = _verify_AB_dict_chunks(
+        AB_dict_dir=AB_dict_dir, num_chunks=num_chunks, current_chunk_tag=None
+    )
+    assert not (
+        len(missing_chunks) > 0 and chunk_id is None
+    ), f"Missing chunks: {missing_chunks}"
 
     # chunk_id is provided, indicating that calculation of AB_dict is needed
     if chunk_id is not None:
         if len(missing_chunks) > 0:
             calculate_chunk_AB_Dict(
                 model_name=model_name,
-                loqer_dtype=loqer_dtype,
+                qera_dtype=qera_dtype,
                 num_chunks=num_chunks,
-                disable_loqer=disable_loqer,
-                loqer_scaling_mode=loqer_scaling_mode,
-                loqer_sqrtm_implementation=loqer_sqrtm_implementation,
-                loqer_sqrtm_num_iters=loqer_sqrtm_num_iters,
-                loqer_config=loqer_config,
-                loqer_scaling_mode_map=loqer_scaling_mode_map,
+                disable_qera=disable_qera,
+                qera_scaling_mode=qera_scaling_mode,
+                qera_sqrtm_implementation=qera_sqrtm_implementation,
+                qera_sqrtm_num_iters=qera_sqrtm_num_iters,
+                qera_config=qera_config,
+                qera_scaling_mode_map=qera_scaling_mode_map,
                 calibration_set=calibration_set,
                 perplexity_max_seq_length=perplexity_max_seq_length,
                 num_calibration_samples=num_calibration_samples,
@@ -1190,34 +1513,50 @@ def pipeline_loqer_chunked():
                 chunk_id=chunk_id,
             )
         else:
-            logger.info(f"All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning.")
+            logger.info(
+                f"All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning."
+            )
 
     # chunk_id is not provided, indicating that all chunks are ready, try to load AB_dict and run fine-tuning
     if chunk_id is None:
         if len(missing_chunks) > 0:
             logger.info(f"Missing chunks: \n{pformat(missing_chunks)}")
-            raise ValueError("Can't load the AB_dict to perform fine-tuning. Missing chunks. Please provide chunk_id to calculate the AB_dict.")
+            raise ValueError(
+                "Can't load the AB_dict to perform fine-tuning. Missing chunks. Please provide chunk_id to calculate the AB_dict."
+            )
         else:
-            logger.info(f"🔊 All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning.")
+            logger.info(
+                f"🔊 All chunks of AB_dict are ready. Quantize model, attach AB_dict and run fine tuning."
+            )
             # # Load model and tokenizer
             tokenizer = transformers.AutoTokenizer.from_pretrained(
                 model_name,
-                use_fast=not args['use_slow_tokenizer'],
-                trust_remote_code=args['trust_remote_code'],
+                use_fast=not args["use_slow_tokenizer"],
+                trust_remote_code=args["trust_remote_code"],
             )
             # TODO: not sure if this is necessary for all datasets (I copied this from the gsm8K)
-            tokenizer.pad_token_id = 0  # unk. we want this to be different from the eos token
+            tokenizer.pad_token_id = (
+                0  # unk. we want this to be different from the eos token
+            )
             tokenizer.padding_side = "left"  # Allow batched inference
             tokenizer.truncation_side = "left"
 
             config = transformers.AutoConfig.from_pretrained(
                 model_name,
-                trust_remote_code=args['trust_remote_code'],
+                trust_remote_code=args["trust_remote_code"],
             )
-            # Overwrite the unquantized model with the quantized model for Peft training (Loqer quantized model is not competible with Peft)
-            if loqer_config['default-1']['w_quantizer']['name'] != 'normalfloat' and loqer_config['default-1']['w_quantizer']['name'] != 'bfloat':
-                if loqer_config['default-1']['w_quantizer']['width'] != 4 and loqer_config['default-1']['w_quantizer']['num_bits'] != 4:
-                    raise ValueError("Fine-tuning only supports normalfloat4 quantizer and floating point4.")
+            # Overwrite the unquantized model with the quantized model for Peft training (QERA quantized model is not competible with Peft)
+            if (
+                qera_config["default-1"]["w_quantizer"]["name"] != "normalfloat"
+                and qera_config["default-1"]["w_quantizer"]["name"] != "bfloat"
+            ):
+                if (
+                    qera_config["default-1"]["w_quantizer"]["width"] != 4
+                    and qera_config["default-1"]["w_quantizer"]["num_bits"] != 4
+                ):
+                    raise ValueError(
+                        "Fine-tuning only supports normalfloat4 quantizer and floating point4."
+                    )
             model = transformers.AutoModelForCausalLM.from_pretrained(
                 model_name,
                 from_tf=bool(".ckpt" in model_name),
@@ -1230,17 +1569,26 @@ def pipeline_loqer_chunked():
                     bnb_4bit_compute_dtype=config.torch_dtype,
                 ),
             )
-            data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+            data_collator = transformers.DataCollatorForLanguageModeling(
+                tokenizer=tokenizer, mlm=False
+            )
 
             # merge all chunks
             AB_dict = {}
-            AB_dict_chunks = list(filter(lambda x: x.is_file() and x.name.endswith(".pt"), AB_dict_dir.iterdir()))
+            AB_dict_chunks = list(
+                filter(
+                    lambda x: x.is_file() and x.name.endswith(".pt"),
+                    AB_dict_dir.iterdir(),
+                )
+            )
             for chunk in tqdm(AB_dict_chunks, desc="Loading chunks"):
                 AB_dict.update(torch.load(chunk))
-            
+
             logger.info("🚀 Fine-tuning...")
             fine_tuning_args = Namespace(**args)
-            model=loftQ_fine_tuning(fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict)
+            model = loftQ_fine_tuning(
+                fine_tuning_args, model=model, tokenizer=tokenizer, AB_dict=AB_dict
+            )
 
             # evaluate
             if not disable_perplexity_eval:
@@ -1263,7 +1611,9 @@ def pipeline_loqer_chunked():
                 model = model.to(eval_dtype)
                 model = dispatch_model(model, device_map)
                 mem_info = get_all_device_mem_info()
-                logger.info(f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}")
+                logger.info(
+                    f"Device memory before perplexity evaluation starts: \n{pformat(mem_info)}"
+                )
                 ppl_results = evaluate_perplexity(
                     model=model,
                     eval_dataloader=eval_dataloader,
@@ -1273,10 +1623,14 @@ def pipeline_loqer_chunked():
                     description="Evaluating",
                 )
 
-                if disable_loqer:
-                    logger.info(f"Perplexity after quantization (no LoQER): {ppl_results['perplexity']:.4f}")
+                if disable_qera:
+                    logger.info(
+                        f"Perplexity after quantization (no QERA): {ppl_results['perplexity']:.4f}"
+                    )
                 else:
-                    logger.info(f"Perplexity after approximation: {ppl_results['perplexity']:.4f}")
+                    logger.info(
+                        f"Perplexity after approximation: {ppl_results['perplexity']:.4f}"
+                    )
 
             if not disable_lm_eval:
                 logger.info("🚀 Evaluating lm-eval downstream tasks...")
@@ -1289,7 +1643,9 @@ def pipeline_loqer_chunked():
                     use_cache=None,
                     batch_size=lm_eval_batch_size,
                 )
-                logger.info(f"Downstream task results: \n{pformat(lm_eval_results['results'])}")
+                logger.info(
+                    f"Downstream task results: \n{pformat(lm_eval_results['results'])}"
+                )
 
             # save perplexity results
             if not disable_perplexity_eval:
@@ -1306,7 +1662,14 @@ def chunk_checker():
     parser = ArgumentParser()
     parser.add_argument("model_name", type=str, help="Model name")
     parser.add_argument("layers_per_chunk", type=int, help="Layers per chunk")
-    parser.add_argument("--output-dir", "-o", dest="output_dir", type=str, help="Output directory", default=None)
+    parser.add_argument(
+        "--output-dir",
+        "-o",
+        dest="output_dir",
+        type=str,
+        help="Output directory",
+        default=None,
+    )
     args = parser.parse_args()
 
     model_name = args.model_name
@@ -1327,7 +1690,9 @@ def chunk_checker():
             if len(missing_chunks) == 0:
                 logger.info("All chunks are ready.")
             else:
-                logger.info(f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}")
+                logger.info(
+                    f"Missing chunks: \n{pformat(missing_chunks, sort_dicts=False)}"
+                )
 
 
 def _merge_chunked_approximation_error(approx_error_dir: Path):
@@ -1361,7 +1726,14 @@ def merge_chunked_results():
         help="Save merged results to $output_dir/approximation_error/quick-save-$timestamp.csv",
         default=False,
     )
-    parser.add_argument("--output-file", "-o", dest="output_file", type=str, help="Output file", default=None)
+    parser.add_argument(
+        "--output-file",
+        "-o",
+        dest="output_file",
+        type=str,
+        help="Output file",
+        default=None,
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -1375,7 +1747,9 @@ def merge_chunked_results():
     if args.quick_save:
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         df.to_csv(approx_error_dir.joinpath(f"quick-save-{timestamp}.csv"), index=False)
-        logger.info(f"Quick save to {approx_error_dir.joinpath(f'quick-save-{timestamp}.csv')}")
+        logger.info(
+            f"Quick save to {approx_error_dir.joinpath(f'quick-save-{timestamp}.csv')}"
+        )
 
     if args.output_file is not None:
         df.to_csv(args.output_file, index=False)

@@ -1,4 +1,4 @@
-workdir=~/Projects/LoQER/experiments/qpeft/glue
+workdir=~/Projects/QERA/experiments/qpeft/glue
 cd $workdir
 
 function check_return_value() {

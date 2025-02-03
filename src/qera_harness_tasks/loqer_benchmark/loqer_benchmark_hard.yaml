@@ -1,4 +1,4 @@
-group: loqer_benchmark_hard
+group: qera_benchmark_hard
 task:
   # - leaderboard_mmlu_pro # tinyllama: 7:21, this is too hard for small models
   - leaderboard_bbh # tinyllama: 10:08

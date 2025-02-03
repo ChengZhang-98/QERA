@@ -30,7 +30,7 @@ class OPTQuantizedAttention(nn.Module):
         dropout: float = 0.0,
         is_decoder: bool = False,
         bias: bool = True,
-        loqer_config=None,
+        qera_config=None,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -46,15 +46,19 @@ class OPTQuantizedAttention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.is_decoder = is_decoder
         # fmt: off
-        self.k_proj = get_quantized_layer_cls("linear", loqer_config["k_proj"])(embed_dim, embed_dim, bias=bias, q_config=loqer_config["k_proj"])
-        self.v_proj = get_quantized_layer_cls("linear", loqer_config["v_proj"])(embed_dim, embed_dim, bias=bias, q_config=loqer_config["v_proj"])
-        self.q_proj = get_quantized_layer_cls("linear", loqer_config["q_proj"])(embed_dim, embed_dim, bias=bias, q_config=loqer_config["q_proj"])
-        self.out_proj = get_quantized_layer_cls("linear", loqer_config["out_proj"])(embed_dim, embed_dim, bias=bias, q_config=loqer_config["out_proj"])
-        self.loqer_config = loqer_config
+        self.k_proj = get_quantized_layer_cls("linear", qera_config["k_proj"])(embed_dim, embed_dim, bias=bias, q_config=qera_config["k_proj"])
+        self.v_proj = get_quantized_layer_cls("linear", qera_config["v_proj"])(embed_dim, embed_dim, bias=bias, q_config=qera_config["v_proj"])
+        self.q_proj = get_quantized_layer_cls("linear", qera_config["q_proj"])(embed_dim, embed_dim, bias=bias, q_config=qera_config["q_proj"])
+        self.out_proj = get_quantized_layer_cls("linear", qera_config["out_proj"])(embed_dim, embed_dim, bias=bias, q_config=qera_config["out_proj"])
+        self.qera_config = qera_config
         # fmt: on
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+        return (
+            tensor.view(bsz, seq_len, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+            .contiguous()
+        )
 
     def forward(
         self,
@@ -113,8 +117,8 @@ class OPTQuantizedAttention(nn.Module):
         src_len = key_states.size(1)
 
         # attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
-        attn_weights = get_quantized_func("bmm", self.loqer_config["bmm_0"])(
-            query_states, key_states.transpose(1, 2), q_config=self.loqer_config["bmm_0"]
+        attn_weights = get_quantized_func("bmm", self.qera_config["bmm_0"])(
+            query_states, key_states.transpose(1, 2), q_config=self.qera_config["bmm_0"]
         )
 
         if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
@@ -128,16 +132,23 @@ class OPTQuantizedAttention(nn.Module):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
                 )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
+            attn_weights = (
+                attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+                + attention_mask
+            )
             attn_weights = torch.max(
                 attn_weights,
-                torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device),
+                torch.tensor(
+                    torch.finfo(attn_weights.dtype).min, device=attn_weights.device
+                ),
             )
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
         if attn_weights.dtype == torch.float16:
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(torch.float16)
+            attn_weights = nn.functional.softmax(
+                attn_weights, dim=-1, dtype=torch.float32
+            ).to(torch.float16)
         else:
             attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
@@ -147,7 +158,9 @@ class OPTQuantizedAttention(nn.Module):
                     f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
                     f" {layer_head_mask.size()}"
                 )
-            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(
+                bsz, self.num_heads, tgt_len, src_len
+            )
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         if output_attentions:
@@ -155,16 +168,22 @@ class OPTQuantizedAttention(nn.Module):
             # make sure that attn_weights keeps its gradient.
             # In order to do so, attn_weights have to be reshaped
             # twice and have to be reused in the following
-            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+            attn_weights_reshaped = attn_weights.view(
+                bsz, self.num_heads, tgt_len, src_len
+            )
+            attn_weights = attn_weights_reshaped.view(
+                bsz * self.num_heads, tgt_len, src_len
+            )
         else:
             attn_weights_reshaped = None
 
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+        attn_probs = nn.functional.dropout(
+            attn_weights, p=self.dropout, training=self.training
+        )
 
         # attn_output = torch.bmm(attn_probs, value_states)
-        attn_output = get_quantized_func("bmm", self.loqer_config["bmm_1"])(
-            attn_probs, value_states, q_config=self.loqer_config["bmm_1"]
+        attn_output = get_quantized_func("bmm", self.qera_config["bmm_1"])(
+            attn_probs, value_states, q_config=self.qera_config["bmm_1"]
         )
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
@@ -186,7 +205,7 @@ class OPTQuantizedAttention(nn.Module):
 
 
 class OPTQuantizedDecoderLayer(nn.Module):
-    def __init__(self, config: OPTConfig, loqer_config: dict):
+    def __init__(self, config: OPTConfig, qera_config: dict):
         super().__init__()
         self.embed_dim = config.hidden_size
         self.self_attn = OPTQuantizedAttention(
@@ -195,7 +214,7 @@ class OPTQuantizedDecoderLayer(nn.Module):
             dropout=config.attention_dropout,
             is_decoder=True,
             bias=config.enable_bias,
-            loqer_config=loqer_config["self_attn"],
+            qera_config=qera_config["self_attn"],
         )
         self.do_layer_norm_before = config.do_layer_norm_before
         self.dropout = config.dropout
@@ -207,10 +226,12 @@ class OPTQuantizedDecoderLayer(nn.Module):
         # self.fc1 = nn.Linear(self.embed_dim, config.ffn_dim, bias=config.enable_bias)
         # self.fc2 = nn.Linear(config.ffn_dim, self.embed_dim, bias=config.enable_bias)
         # fmt: off
-        self.fc1 = get_quantized_layer_cls("linear", loqer_config["fc1"])(self.embed_dim, config.ffn_dim, bias=config.enable_bias, q_config=loqer_config["fc1"])
-        self.fc2 = get_quantized_layer_cls("linear", loqer_config["fc2"])(config.ffn_dim, self.embed_dim, bias=config.enable_bias, q_config=loqer_config["fc2"])
+        self.fc1 = get_quantized_layer_cls("linear", qera_config["fc1"])(self.embed_dim, config.ffn_dim, bias=config.enable_bias, q_config=qera_config["fc1"])
+        self.fc2 = get_quantized_layer_cls("linear", qera_config["fc2"])(config.ffn_dim, self.embed_dim, bias=config.enable_bias, q_config=qera_config["fc2"])
         # fmt: on
-        self.final_layer_norm = nn.LayerNorm(self.embed_dim, elementwise_affine=config.layer_norm_elementwise_affine)
+        self.final_layer_norm = nn.LayerNorm(
+            self.embed_dim, elementwise_affine=config.layer_norm_elementwise_affine
+        )
 
     def forward(
         self,
@@ -220,7 +241,9 @@ class OPTQuantizedDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -251,7 +274,9 @@ class OPTQuantizedDecoderLayer(nn.Module):
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
         )
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = nn.functional.dropout(
+            hidden_states, p=self.dropout, training=self.training
+        )
         hidden_states = residual + hidden_states
 
         # 350m applies layer norm AFTER attention
@@ -271,7 +296,9 @@ class OPTQuantizedDecoderLayer(nn.Module):
         hidden_states = self.activation_fn(hidden_states)
 
         hidden_states = self.fc2(hidden_states)
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+        hidden_states = nn.functional.dropout(
+            hidden_states, p=self.dropout, training=self.training
+        )
 
         hidden_states = (residual + hidden_states).view(hidden_states_shape)
 
@@ -290,7 +317,7 @@ class OPTQuantizedDecoderLayer(nn.Module):
         return outputs
 
 
-def build_loqer_config_opt(model: OPTForCausalLM, loqer_config: dict):
+def build_qera_config_opt(model: OPTForCausalLM, qera_config: dict):
     parsed_config = {}
 
     decoder_layer_i: OPTDecoderLayer
@@ -298,40 +325,50 @@ def build_loqer_config_opt(model: OPTForCausalLM, loqer_config: dict):
         parsed_config[f"model_layer_{i}"] = {"self_attn": {}}
 
         for fc_short_name in ["k_proj", "v_proj", "q_proj", "out_proj"]:
-            fc_name = get_layer_name(model, getattr(decoder_layer_i.self_attn, fc_short_name))
-            matched_entry = find_matched_pattern(fc_name, loqer_config.keys())
+            fc_name = get_layer_name(
+                model, getattr(decoder_layer_i.self_attn, fc_short_name)
+            )
+            matched_entry = find_matched_pattern(fc_name, qera_config.keys())
             assert matched_entry is not None, f"Cannot find matched entry for {fc_name}"
             if isinstance(matched_entry, str):
-                matched_entry = loqer_config[matched_entry]
-            parsed_config[f"model_layer_{i}"]["self_attn"][fc_short_name] = deepcopy(loqer_config[matched_entry])
+                matched_entry = qera_config[matched_entry]
+            parsed_config[f"model_layer_{i}"]["self_attn"][fc_short_name] = deepcopy(
+                qera_config[matched_entry]
+            )
 
         for matmul_short_name in ["bmm_0", "bmm_1"]:
             matmul_name = fc_name.replace("out_proj", matmul_short_name)
-            matched_entry = find_matched_pattern(matmul_name, loqer_config.keys())
-            assert matched_entry is not None, f"Cannot find matched entry for {matmul_name}"
+            matched_entry = find_matched_pattern(matmul_name, qera_config.keys())
+            assert (
+                matched_entry is not None
+            ), f"Cannot find matched entry for {matmul_name}"
             if isinstance(matched_entry, str):
-                matched_entry = loqer_config[matched_entry]
-            parsed_config[f"model_layer_{i}"]["self_attn"][matmul_short_name] = deepcopy(loqer_config[matched_entry])
+                matched_entry = qera_config[matched_entry]
+            parsed_config[f"model_layer_{i}"]["self_attn"][matmul_short_name] = (
+                deepcopy(qera_config[matched_entry])
+            )
 
         for fc_short_name in ["fc1", "fc2"]:
             fc_name = get_layer_name(model, getattr(decoder_layer_i, fc_short_name))
-            matched_entry = find_matched_pattern(fc_name, loqer_config.keys())
+            matched_entry = find_matched_pattern(fc_name, qera_config.keys())
             assert matched_entry is not None, f"Cannot find matched entry for {fc_name}"
             if isinstance(matched_entry, str):
-                matched_entry = loqer_config[matched_entry]
-            parsed_config[f"model_layer_{i}"][fc_short_name] = deepcopy(loqer_config[matched_entry])
+                matched_entry = qera_config[matched_entry]
+            parsed_config[f"model_layer_{i}"][fc_short_name] = deepcopy(
+                qera_config[matched_entry]
+            )
 
     return parsed_config
 
 
 def quantize_opt_model(
     model: OPTForCausalLM | OPTForSequenceClassification | OPTForQuestionAnswering,
-    loqer_config: dict,
+    qera_config: dict,
 ):
-    loqer_config = build_loqer_config_opt(model, loqer_config)
+    qera_config = build_qera_config_opt(model, qera_config)
     for layer_id, ori_decoder_layer in enumerate(model.model.decoder.layers):
         layer_entry = f"model_layer_{layer_id}"
-        q_config_layer = loqer_config[layer_entry]
+        q_config_layer = qera_config[layer_entry]
 
         new_decoder_layer = OPTQuantizedDecoderLayer(model.config, q_config_layer)
         new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).dtype)
@@ -346,7 +383,9 @@ def quantize_opt_model(
     return model
 
 
-def find_layers_to_register_scale_hook_opt(model: OPTForCausalLM) -> list[dict[str, str | list[str]]]:
+def find_layers_to_register_scale_hook_opt(
+    model: OPTForCausalLM,
+) -> list[dict[str, str | list[str]]]:
     assert model.config._attn_implementation == "eager"
 
     layers_to_register = []
@@ -356,7 +395,9 @@ def find_layers_to_register_scale_hook_opt(model: OPTForCausalLM) -> list[dict[s
         k_name = get_layer_name(model, decoder_layer.self_attn.k_proj)
         q_name = get_layer_name(model, decoder_layer.self_attn.q_proj)
         v_name = get_layer_name(model, decoder_layer.self_attn.v_proj)
-        layers_to_register.append(dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name]))
+        layers_to_register.append(
+            dict(target_layer=k_name, layers_sharing_scale=[q_name, v_name])
+        )
 
         out_name = get_layer_name(model, decoder_layer.self_attn.out_proj)
         layers_to_register.append(dict(target_layer=out_name, layers_sharing_scale=[]))

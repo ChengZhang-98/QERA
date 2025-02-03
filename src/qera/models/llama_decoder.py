@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class LlamaQuantizedMLP(nn.Module):
-    def __init__(self, config: LlamaConfig, loqer_config: dict):
+    def __init__(self, config: LlamaConfig, qera_config: dict):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
@@ -33,9 +33,9 @@ class LlamaQuantizedMLP(nn.Module):
         # self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         # self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
         # fmt: off
-        self.gate_proj = get_quantized_layer_cls("linear", q_config=loqer_config["gate_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=loqer_config["gate_proj"])
-        self.up_proj = get_quantized_layer_cls("linear", q_config=loqer_config["up_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=loqer_config["up_proj"])
-        self.down_proj = get_quantized_layer_cls("linear", q_config=loqer_config["down_proj"])(self.intermediate_size, self.hidden_size, bias=False, q_config=loqer_config["down_proj"])
+        self.gate_proj = get_quantized_layer_cls("linear", q_config=qera_config["gate_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=qera_config["gate_proj"])
+        self.up_proj = get_quantized_layer_cls("linear", q_config=qera_config["up_proj"])(self.hidden_size, self.intermediate_size, bias=False, q_config=qera_config["up_proj"])
+        self.down_proj = get_quantized_layer_cls("linear", q_config=qera_config["down_proj"])(self.intermediate_size, self.hidden_size, bias=False, q_config=qera_config["down_proj"])
         # fmt: on
         self.act_fn = ACT2FN[config.hidden_act]
 
@@ -51,7 +51,7 @@ class LlamaQuantizedMLP(nn.Module):
 class LlamaQuantizedAttention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig, layer_idx: int, loqer_config: dict):
+    def __init__(self, config: LlamaConfig, layer_idx: int, qera_config: dict):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -83,11 +83,11 @@ class LlamaQuantizedAttention(nn.Module):
         # self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
         # self.o_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attention_bias)
         # fmt: off
-        self.q_proj = get_quantized_layer_cls("linear", q_config=loqer_config["q_proj"])(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias, q_config=loqer_config["q_proj"])
-        self.k_proj = get_quantized_layer_cls("linear", q_config=loqer_config["k_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias, q_config=loqer_config["k_proj"])
-        self.v_proj = get_quantized_layer_cls("linear", q_config=loqer_config["v_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias, q_config=loqer_config["v_proj"])
-        self.o_proj = get_quantized_layer_cls("linear", q_config=loqer_config["o_proj"])(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias, q_config=loqer_config["o_proj"])
-        self.loqer_config = loqer_config
+        self.q_proj = get_quantized_layer_cls("linear", q_config=qera_config["q_proj"])(self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias, q_config=qera_config["q_proj"])
+        self.k_proj = get_quantized_layer_cls("linear", q_config=qera_config["k_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias, q_config=qera_config["k_proj"])
+        self.v_proj = get_quantized_layer_cls("linear", q_config=qera_config["v_proj"])(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias, q_config=qera_config["v_proj"])
+        self.o_proj = get_quantized_layer_cls("linear", q_config=qera_config["o_proj"])(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias, q_config=qera_config["o_proj"])
+        self.qera_config = qera_config
         # fmt: on
 
         # TODO (joao): remove in v4.45 (RoPE is computed in the model, not in the decoder layers)
@@ -102,7 +102,9 @@ class LlamaQuantizedAttention(nn.Module):
         output_attentions: bool = False,
         use_cache: bool = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.45
+        position_embeddings: Optional[
+            Tuple[torch.Tensor, torch.Tensor]
+        ] = None,  # will become mandatory in v4.45
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
@@ -114,9 +116,15 @@ class LlamaQuantizedAttention(nn.Module):
             key_states = self.k_proj(hidden_states)
             value_states = self.v_proj(hidden_states)
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(
+            bsz, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
 
         if position_embeddings is None:
             logger.warning_once(
@@ -128,12 +136,16 @@ class LlamaQuantizedAttention(nn.Module):
             cos, sin = self.rotary_emb(value_states, position_ids)
         else:
             cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin
+        )
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -144,8 +156,8 @@ class LlamaQuantizedAttention(nn.Module):
         kv_seq_len = key_states.size(2)
         query_states = query_states.reshape(bsz * self.num_heads, q_len, self.head_dim)
         key_states = key_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
-        attn_weights = get_quantized_func("matmul", q_config=self.loqer_config["matmul_0"])(
-            query_states, key_states.transpose(1, 2), q_config=self.loqer_config["matmul_0"]
+        attn_weights = get_quantized_func("matmul", q_config=self.qera_config["matmul_0"])(
+            query_states, key_states.transpose(1, 2), q_config=self.qera_config["matmul_0"]
         ) / math.sqrt(self.head_dim)
         attn_weights = attn_weights.reshape(bsz, self.num_heads, q_len, kv_seq_len)
         # fmt: on
@@ -155,15 +167,21 @@ class LlamaQuantizedAttention(nn.Module):
             attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_weights = nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32
+        ).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(
+            attn_weights, p=self.attention_dropout, training=self.training
+        )
         # *: matmul_1
         # attn_output = torch.matmul(attn_weights, value_states)
         attn_weights = attn_weights.reshape(bsz * self.num_heads, q_len, kv_seq_len)
-        value_states = value_states.reshape(bsz * self.num_heads, kv_seq_len, self.head_dim)
-        attn_output = get_quantized_func("matmul", q_config=self.loqer_config["matmul_1"])(
-            attn_weights, value_states, q_config=self.loqer_config["matmul_1"]
+        value_states = value_states.reshape(
+            bsz * self.num_heads, kv_seq_len, self.head_dim
         )
+        attn_output = get_quantized_func(
+            "matmul", q_config=self.qera_config["matmul_1"]
+        )(attn_weights, value_states, q_config=self.qera_config["matmul_1"])
         attn_output = attn_output.reshape(bsz, self.num_heads, q_len, self.head_dim)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
@@ -193,17 +211,19 @@ LLAMA_ATTENTION_CLASSES = {
 
 
 class LlamaQuantizedDecoderLayer(nn.Module):
-    def __init__(self, config: LlamaConfig, layer_idx: int, loqer_config: dict):
+    def __init__(self, config: LlamaConfig, layer_idx: int, qera_config: dict):
         super().__init__()
         self.hidden_size = config.hidden_size
 
         self.self_attn = LLAMA_ATTENTION_CLASSES[config._attn_implementation](
-            config=config, layer_idx=layer_idx, loqer_config=loqer_config["self_attn"]
+            config=config, layer_idx=layer_idx, qera_config=qera_config["self_attn"]
         )
 
-        self.mlp = LlamaQuantizedMLP(config, loqer_config=loqer_config["mlp"])
+        self.mlp = LlamaQuantizedMLP(config, qera_config=qera_config["mlp"])
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = LlamaRMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
 
     def forward(
         self,
@@ -214,9 +234,13 @@ class LlamaQuantizedDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,  # will become mandatory in v4.45
+        position_embeddings: Optional[
+            Tuple[torch.Tensor, torch.Tensor]
+        ] = None,  # will become mandatory in v4.45
         **kwargs,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -274,46 +298,58 @@ class LlamaQuantizedDecoderLayer(nn.Module):
         return outputs
 
 
-def build_loqer_config_llama(model: LlamaForCausalLM, loqer_config: dict):
+def build_qera_config_llama(model: LlamaForCausalLM, qera_config: dict):
     parsed_config = {}
 
     decoder_layer_i: LlamaDecoderLayer
     for i, decoder_layer_i in enumerate(model.model.layers):
         parsed_config[f"model_layer_{i}"] = {"self_attn": {}, "mlp": {}}
         for fc_short_name in ["k_proj", "q_proj", "v_proj", "o_proj"]:
-            fc_name = get_layer_name(model, getattr(decoder_layer_i.self_attn, fc_short_name))
-            matched_entry = find_matched_pattern(fc_name, loqer_config.keys())
+            fc_name = get_layer_name(
+                model, getattr(decoder_layer_i.self_attn, fc_short_name)
+            )
+            matched_entry = find_matched_pattern(fc_name, qera_config.keys())
             assert matched_entry is not None, f"Cannot find matched entry for {fc_name}"
-            if isinstance(loqer_config[matched_entry], str):
-                matched_entry = loqer_config[matched_entry]
-            parsed_config[f"model_layer_{i}"]["self_attn"][fc_short_name] = deepcopy(loqer_config[matched_entry])
+            if isinstance(qera_config[matched_entry], str):
+                matched_entry = qera_config[matched_entry]
+            parsed_config[f"model_layer_{i}"]["self_attn"][fc_short_name] = deepcopy(
+                qera_config[matched_entry]
+            )
         for matmul_short_name in ["matmul_0", "matmul_1"]:
             matmul_name = fc_name.replace("o_proj", matmul_short_name)
-            matched_entry = find_matched_pattern(matmul_name, loqer_config.keys())
-            assert matched_entry is not None, f"Cannot find matched entry for {matmul_name}"
-            if isinstance(loqer_config[matched_entry], str):
-                matched_entry = loqer_config[matched_entry]
-            parsed_config[f"model_layer_{i}"]["self_attn"][matmul_short_name] = deepcopy(loqer_config[matched_entry])
+            matched_entry = find_matched_pattern(matmul_name, qera_config.keys())
+            assert (
+                matched_entry is not None
+            ), f"Cannot find matched entry for {matmul_name}"
+            if isinstance(qera_config[matched_entry], str):
+                matched_entry = qera_config[matched_entry]
+            parsed_config[f"model_layer_{i}"]["self_attn"][matmul_short_name] = (
+                deepcopy(qera_config[matched_entry])
+            )
         for fc_short_name in ["gate_proj", "up_proj", "down_proj"]:
             fc_name = get_layer_name(model, getattr(decoder_layer_i.mlp, fc_short_name))
-            matched_entry = find_matched_pattern(fc_name, loqer_config.keys())
+            matched_entry = find_matched_pattern(fc_name, qera_config.keys())
             assert matched_entry is not None, f"Cannot find matched entry for {fc_name}"
-            if isinstance(loqer_config[matched_entry], str):
-                matched_entry = loqer_config[matched_entry]
-            parsed_config[f"model_layer_{i}"]["mlp"][fc_short_name] = deepcopy(loqer_config[matched_entry])
+            if isinstance(qera_config[matched_entry], str):
+                matched_entry = qera_config[matched_entry]
+            parsed_config[f"model_layer_{i}"]["mlp"][fc_short_name] = deepcopy(
+                qera_config[matched_entry]
+            )
 
     return parsed_config
 
 
-def quantize_llama_model(model: LlamaForCausalLM, loqer_config: dict):
-    loqer_config = build_loqer_config_llama(model, loqer_config)
+def quantize_llama_model(model: LlamaForCausalLM, qera_config: dict):
+    qera_config = build_qera_config_llama(model, qera_config)
 
     for layer_id, ori_decoder_layer in enumerate(model.model.layers):
         layer_entry = f"model_layer_{layer_id}"
-        layer_loqer_config = loqer_config[layer_entry]
+        layer_qera_config = qera_config[layer_entry]
 
         # replace the decoder layer with quantized decoder layer
-        new_decoder_layer = LlamaQuantizedDecoderLayer(model.config, layer_id, layer_loqer_config)
+        new_decoder_layer = LlamaQuantizedDecoderLayer(
+            model.config, layer_id, layer_qera_config
+        )
         ori_rope = ori_decoder_layer.self_attn.rotary_emb
         new_decoder_layer.to(next(iter(ori_decoder_layer.parameters())).dtype)
         new_decoder_layer.self_attn.rotary_emb = ori_rope
@@ -328,7 +364,9 @@ def quantize_llama_model(model: LlamaForCausalLM, loqer_config: dict):
     return model
 
 
-def find_layers_to_register_scale_hook_llama(model: LlamaForCausalLM) -> list[dict[str, str | list[str]]]:
+def find_layers_to_register_scale_hook_llama(
+    model: LlamaForCausalLM,
+) -> list[dict[str, str | list[str]]]:
     """
     return a list of dict, each dict contains the following keys:
 

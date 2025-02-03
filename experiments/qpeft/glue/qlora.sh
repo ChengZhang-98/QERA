@@ -1,4 +1,4 @@
-workdir=~/Projects/LoQER/experiments/jamie/peft_cls
+workdir=~/Projects/QERA/experiments/jamie/peft_cls
 cd $workdir
 
 function check_return_value() {

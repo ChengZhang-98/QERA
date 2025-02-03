@@ -20,7 +20,7 @@ formatter = ColoredFormatter(
 handler = logging.StreamHandler()
 handler.setFormatter(formatter)
 
-root_logger = logging.getLogger("loqer")
+root_logger = logging.getLogger("qera")
 root_logger.addHandler(handler)
 root_logger.setLevel(logging.INFO)
 root_logger.propagate = False

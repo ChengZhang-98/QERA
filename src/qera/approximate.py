@@ -22,7 +22,7 @@ def compute_AB_and_approximation_error(
     model,
     layers_to_approximate: list[str],
     scale_dict: dict[str, torch.Tensor],
-    loqer_config: dict,
+    qera_config: dict,
     move_model_back: bool = True,
 ):
     AB_dict = {}
@@ -38,15 +38,17 @@ def compute_AB_and_approximation_error(
         layer.to(full_device_map[layer_name])
         # scale
         scale = scale_dict[layer_name].clone()
-        # loqer config
-        matched_entry = find_matched_pattern(layer_name, loqer_config.keys())
+        # qera config
+        matched_entry = find_matched_pattern(layer_name, qera_config.keys())
         if isinstance(matched_entry, str):
-            matched_entry = loqer_config[matched_entry]
-        layer_loqer_config = deepcopy(loqer_config[matched_entry])
-        layer_AB_dict, mse = _compute_scales_and_error_for_fc(layer_name, layer, scale, layer_loqer_config)
+            matched_entry = qera_config[matched_entry]
+        layer_qera_config = deepcopy(qera_config[matched_entry])
+        layer_AB_dict, mse = _compute_scales_and_error_for_fc(
+            layer_name, layer, scale, layer_qera_config
+        )
         layer_AB_dict = {k: v.to("cpu") for k, v in layer_AB_dict.items()}
         AB_dict.update(layer_AB_dict)
-        df.loc[len(df)] = [layer_name, mse, layer_loqer_config["rank"]]
+        df.loc[len(df)] = [layer_name, mse, layer_qera_config["rank"]]
 
         layer.to("cpu")
 
@@ -64,15 +66,23 @@ def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tens
     Refer to https://pytorch.org/docs/stable/generated/torch.linalg.inv.html
     """
     if scale.ndim == 1:
-        scale = torch.where(scale <= 0, torch.ones_like(scale) * torch.finfo(scale.dtype).eps, scale)
+        scale = torch.where(
+            scale <= 0, torch.ones_like(scale) * torch.finfo(scale.dtype).eps, scale
+        )
         return torch.linalg.solve(torch.diag(scale), U)
     elif scale.ndim == 2:
         try:
             return torch.linalg.solve(scale, U)
         except RuntimeError as e:
-            logger.warning(f"Matrix inversion failed: {e} Adding turbulence to the scale matrix")
+            logger.warning(
+                f"Matrix inversion failed: {e} Adding turbulence to the scale matrix"
+            )
             U_scale, S_scale, V_T_scale = torch.linalg.svd(scale)
-            S_scale = torch.where(S_scale <= 0, torch.ones_like(S_scale) * torch.finfo(S_scale.dtype).eps, S_scale)
+            S_scale = torch.where(
+                S_scale <= 0,
+                torch.ones_like(S_scale) * torch.finfo(S_scale.dtype).eps,
+                S_scale,
+            )
             scale = U_scale @ torch.diag(S_scale) @ V_T_scale
             return torch.linalg.solve(scale, U)
     else:
@@ -80,7 +90,10 @@ def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tens
 
 
 def _compute_scales_and_error_for_fc(
-    layer_name: str, layer: torch.nn.Linear, scale: torch.Tensor, layer_loqer_config: dict
+    layer_name: str,
+    layer: torch.nn.Linear,
+    scale: torch.Tensor,
+    layer_qera_config: dict,
 ) -> tuple[dict[str, torch.Tensor], float]:
     """
 
@@ -97,13 +110,14 @@ def _compute_scales_and_error_for_fc(
           = x @ W^T
 
     """
-    rank = layer_loqer_config["rank"]
+    rank = layer_qera_config["rank"]
 
     w_quantizer = partial(
-        get_quantizer(layer_loqer_config["w_quantizer"].pop("name")), **layer_loqer_config["w_quantizer"]
+        get_quantizer(layer_qera_config["w_quantizer"].pop("name")),
+        **layer_qera_config["w_quantizer"],
     )
 
-    ab_q_config = deepcopy(layer_loqer_config["x_quantizer"])
+    ab_q_config = deepcopy(layer_qera_config["x_quantizer"])
 
     ab_quantizer = partial(get_quantizer(ab_q_config.pop("name")), **ab_q_config)
 
@@ -112,7 +126,9 @@ def _compute_scales_and_error_for_fc(
     weight_q = w_quantizer(weight).to(weight.device)
     scale = scale.to(weight.dtype).to(weight.device)
     if scale.ndim == 1:
-        assert scale.shape[0] == weight.shape[1], "Scale must have the same number of elements as the weight"
+        assert (
+            scale.shape[0] == weight.shape[1]
+        ), "Scale must have the same number of elements as the weight"
         scaled_q_error_T = torch.diag(scale) @ (weight - weight_q).transpose(0, 1)
     elif scale.ndim == 2:
         assert scale.shape[0] == scale.shape[1], "Scale must be a square matrix"
@@ -139,7 +155,11 @@ def _compute_scales_and_error_for_fc(
     B_name = layer_name + ".B"
 
     mean_squared_error = (
-        torch.nn.functional.mse_loss(weight.transpose(0, 1), weight_q.transpose(0, 1) + A @ B).cpu().item()
+        torch.nn.functional.mse_loss(
+            weight.transpose(0, 1), weight_q.transpose(0, 1) + A @ B
+        )
+        .cpu()
+        .item()
     )
     if mean_squared_error > 1e-3:
         logger.warning(f"Mean squared error for {layer_name}: {mean_squared_error}")

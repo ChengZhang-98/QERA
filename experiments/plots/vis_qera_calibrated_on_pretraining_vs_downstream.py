@@ -6,7 +6,7 @@ sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from loqer_exp.styles import set_default_style, plot_palette, get_color
+from qera_exp.styles import set_default_style, plot_palette, get_color
 
 plot_palette("cbf")
 # %%
@@ -51,19 +51,48 @@ loss_lr3_down = loss_lr3_down.rolling(window=window_size).mean()
 
 fig, ax = plt.subplots(1, 1, figsize=figsize)
 
-ax.plot(loss_lr1_down, label="Downstream_lr-1e-4", color=get_color("cbf_purple"), linestyle="-")
-ax.plot(loss_lr1_pre, label="Pretraining_lr-1e-4", color=get_color("cbf_darkgreen"), linestyle="-")
-ax.plot(loss_lr2_down, label="Downstream_lr-2e-4", color=get_color("cbf_red"), linestyle="-")
-ax.plot(loss_lr2_pre, label="Pretraining_lr-2e-4", color=get_color("cbf_green"), linestyle="-")
-ax.plot(loss_lr3_down, label="Downstream_lr-3e-4", color=get_color("cbf_lightred"), linestyle="-")
-ax.plot(loss_lr3_pre, label="Pretraining_lr-3e-4", color=get_color("cbf_lightgreen"), linestyle="-")
+ax.plot(
+    loss_lr1_down,
+    label="Downstream_lr-1e-4",
+    color=get_color("cbf_purple"),
+    linestyle="-",
+)
+ax.plot(
+    loss_lr1_pre,
+    label="Pretraining_lr-1e-4",
+    color=get_color("cbf_darkgreen"),
+    linestyle="-",
+)
+ax.plot(
+    loss_lr2_down, label="Downstream_lr-2e-4", color=get_color("cbf_red"), linestyle="-"
+)
+ax.plot(
+    loss_lr2_pre,
+    label="Pretraining_lr-2e-4",
+    color=get_color("cbf_green"),
+    linestyle="-",
+)
+ax.plot(
+    loss_lr3_down,
+    label="Downstream_lr-3e-4",
+    color=get_color("cbf_lightred"),
+    linestyle="-",
+)
+ax.plot(
+    loss_lr3_pre,
+    label="Pretraining_lr-3e-4",
+    color=get_color("cbf_lightgreen"),
+    linestyle="-",
+)
 
 ax.set_xlabel("Step")
 ax.set_ylabel("Loss")
 # put legend outside of the plot
-ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=3)
+ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1), ncol=3)
 
 plt.tight_layout()
 
 # save to pdf
-plt.savefig("roberta-qera-calibrated-on-pretraining-vs-downstream.pdf", bbox_inches="tight")
+plt.savefig(
+    "roberta-qera-calibrated-on-pretraining-vs-downstream.pdf", bbox_inches="tight"
+)

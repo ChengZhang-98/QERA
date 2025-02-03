@@ -4,9 +4,13 @@ from pathlib import Path
 sys.path.append(Path(__file__).parents[0].joinpath("src").as_posix())
 
 
-from loqer.ptq_pipeline import pipeline_loqer, pipeline_fp16_bf16_fp32, pipeline_loqer_chunked
-from loqer.logging import set_logging_verbosity
+from qera.ptq_pipeline import (
+    pipeline_qera,
+    pipeline_fp16_bf16_fp32,
+    pipeline_qera_chunked,
+)
+from qera.logging import set_logging_verbosity
 
 if __name__ == "__main__":
     set_logging_verbosity("info")
-    pipeline_loqer_chunked()
+    pipeline_qera_chunked()

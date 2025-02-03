@@ -1,7 +1,7 @@
 model_name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
 # Note that the dtype for statistic profiling is hard-coded float32,
 # since the SVD of float16 is not supported by pytorch
-loqer_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
+qera_dtype: float32 # the precision for computing A, and B. Note that scale is always computed in float64
 eval_dtype: float16 # the precision for evaluation
 device_map: auto-balanced
 num_workers: 8
@@ -31,13 +31,13 @@ lm_eval_tasks:
 lm_eval_batch_size: 4
 lm_eval_num_fewshot: 0
 
-# LoQER
-disable_loqer: false # if true, quantization only without A & B
-loqer_scaling_mode: rxx # "rxx" or "diagonal"
-loqer_sqrtm_implementation: iterative
-loqer_sqrtm_num_iters: 100
-loqer_scaling_mode_map: null
-loqer_config:
+# QERA
+disable_qera: false # if true, quantization only without A & B
+qera_scaling_mode: rxx # "rxx" or "diagonal"
+qera_sqrtm_implementation: iterative
+qera_sqrtm_num_iters: 100
+qera_scaling_mode_map: null
+qera_config:
   # llama/mistral
   'model\.layers\.[0-9]+\.self_attn\.(k|q|v|o)_proj': default-1
   'model\.layers\.[0-9]+\.mlp\.(gate|down|up)_proj': default-1
@@ -49,7 +49,7 @@ loqer_config:
 
   default-1:
     rank: 32
-    name: loqer
+    name: qera
     is_ptq: true
     x_quantizer:
       name: bypass

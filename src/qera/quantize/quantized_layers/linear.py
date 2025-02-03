@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from ..quantizers import get_quantizer
 
 
-class LinearLoQER(nn.Linear):
+class LinearQERA(nn.Linear):
     def __init__(
         self,
         in_features: int,
@@ -19,7 +19,9 @@ class LinearLoQER(nn.Linear):
         dtype=None,
         q_config: dict = None,
     ) -> None:
-        super().__init__(in_features, out_features, bias=bias, device=device, dtype=dtype)
+        super().__init__(
+            in_features, out_features, bias=bias, device=device, dtype=dtype
+        )
         self.q_config = q_config
         if q_config is None:
             self.bypass = True
@@ -35,17 +37,35 @@ class LinearLoQER(nn.Linear):
             x_quantizer_config = deepcopy(q_config["x_quantizer"])
             w_quantizer_config = deepcopy(q_config["w_quantizer"])
 
-            self.x_quantizer = partial(get_quantizer(x_quantizer_config.pop("name")), **x_quantizer_config)
-            self.w_quantizer = partial(get_quantizer(w_quantizer_config.pop("name")), **w_quantizer_config)
+            self.x_quantizer = partial(
+                get_quantizer(x_quantizer_config.pop("name")), **x_quantizer_config
+            )
+            self.w_quantizer = partial(
+                get_quantizer(w_quantizer_config.pop("name")), **w_quantizer_config
+            )
 
             if self.bias is not None:
-                b_quantizer_config = deepcopy(q_config.get("b_quantizer", q_config["x_quantizer"]))
-                self.b_quantizer = partial(get_quantizer(b_quantizer_config.pop("name")), **b_quantizer_config)
+                b_quantizer_config = deepcopy(
+                    q_config.get("b_quantizer", q_config["x_quantizer"])
+                )
+                self.b_quantizer = partial(
+                    get_quantizer(b_quantizer_config.pop("name")), **b_quantizer_config
+                )
 
-            A_out_quantizer_config = deepcopy(q_config.get("A_out_quantizer", q_config["x_quantizer"]))
-            B_out_quantizer_config = deepcopy(q_config.get("B_out_quantizer", q_config["x_quantizer"]))
-            self.A_out_quantizer = partial(get_quantizer(A_out_quantizer_config.pop("name")), **A_out_quantizer_config)
-            self.B_out_quantizer = partial(get_quantizer(B_out_quantizer_config.pop("name")), **B_out_quantizer_config)
+            A_out_quantizer_config = deepcopy(
+                q_config.get("A_out_quantizer", q_config["x_quantizer"])
+            )
+            B_out_quantizer_config = deepcopy(
+                q_config.get("B_out_quantizer", q_config["x_quantizer"])
+            )
+            self.A_out_quantizer = partial(
+                get_quantizer(A_out_quantizer_config.pop("name")),
+                **A_out_quantizer_config
+            )
+            self.B_out_quantizer = partial(
+                get_quantizer(B_out_quantizer_config.pop("name")),
+                **B_out_quantizer_config
+            )
 
     def forward(self, x):
         if self.bypass:
@@ -99,7 +119,7 @@ class LinearLoQER(nn.Linear):
             )
         else:
             if self.A is None or self.B is None:
-                txt = "{}(in_features={}, out_features={}, bias={}, is_ptq={}, LoQER_enabled={}, x_quantizer={}, w_quantizer={})".format(
+                txt = "{}(in_features={}, out_features={}, bias={}, is_ptq={}, QERA_enabled={}, x_quantizer={}, w_quantizer={})".format(
                     self.__class__.__name__,
                     self.in_features,
                     self.out_features,
@@ -110,7 +130,7 @@ class LinearLoQER(nn.Linear):
                     self._get_quantizer_name(self.w_quantizer),
                 )
             else:
-                txt = "{}(in_features={}, out_features={}, bias={}, is_ptq={}, LoQER_enabled={}, x_quantizer={}, w_quantizer={}, rank={}, xA_quantizer={}, xAB_quantizer={}".format(
+                txt = "{}(in_features={}, out_features={}, bias={}, is_ptq={}, QERA_enabled={}, x_quantizer={}, w_quantizer={}, rank={}, xA_quantizer={}, xAB_quantizer={}".format(
                     self.__class__.__name__,
                     self.in_features,
                     self.out_features,

@@ -8,7 +8,7 @@ from accelerate import infer_auto_device_map
 from nvitop import CudaDevice, parse_cuda_visible_devices
 
 
-LOQER_SRC_DIR = Path(__file__).resolve().parent  # .../src/loqer
+QERA_SRC_DIR = Path(__file__).resolve().parent  # .../src/qera
 
 
 def get_all_device_mem_info() -> dict[int, dict[str, int]]:
@@ -84,7 +84,10 @@ def create_device_map(model, device_map) -> dict[str, int]:
             no_split_module_classes=model._no_split_modules,
         )
     elif device_map == "auto-balanced":
-        max_memory = {i: torch.cuda.mem_get_info(i)[0] // 2 for i in range(torch.cuda.device_count())}
+        max_memory = {
+            i: torch.cuda.mem_get_info(i)[0] // 2
+            for i in range(torch.cuda.device_count())
+        }
         device_map = infer_auto_device_map(
             model,
             no_split_module_classes=model._no_split_modules,

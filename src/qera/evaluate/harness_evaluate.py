@@ -1,11 +1,13 @@
 from typing import List, Optional, Union
 import torch
 from lm_eval.models.huggingface import HFLM
-from lm_eval.evaluator import simple_evaluate as _simple_evaluate  # as evaluate_harness_downstream
+from lm_eval.evaluator import (
+    simple_evaluate as _simple_evaluate,
+)  # as evaluate_harness_downstream
 from lm_eval.utils import make_table as harness_make_table
 from lm_eval.tasks import TaskManager
 
-from ..utils import LOQER_SRC_DIR
+from ..utils import QERA_SRC_DIR
 
 
 @torch.no_grad()
@@ -41,10 +43,10 @@ def evaluate_harness_downstream(
     model.eval()
     model = HFLM(model)
     if task_manager is None:
-        LOQER_HARNESS_TASK_DIR = LOQER_SRC_DIR.parent.joinpath("loqer_harness_tasks")
+        QERA_HARNESS_TASK_DIR = QERA_SRC_DIR.parent.joinpath("qera_harness_tasks")
         task_manager = TaskManager(
             verbosity=verbosity,
-            include_path=LOQER_HARNESS_TASK_DIR.absolute().as_posix(),
+            include_path=QERA_HARNESS_TASK_DIR.absolute().as_posix(),
             include_defaults=True,
         )
     results = _simple_evaluate(

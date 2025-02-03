@@ -7,12 +7,12 @@ import transformers
 from accelerate import dispatch_model
 from tqdm import tqdm
 
-from loqer.datasets import get_data_module
-from loqer.models import find_layers_to_approximate, find_layers_to_register_scale_hook
-from loqer.statistic_profiler import register_scale_hooks
-from loqer.evaluate import evaluate_perplexity
+from qera.datasets import get_data_module
+from qera.models import find_layers_to_approximate, find_layers_to_register_scale_hook
+from qera.statistic_profiler import register_scale_hooks
+from qera.evaluate import evaluate_perplexity
 
-from loqer.utils import create_device_map
+from qera.utils import create_device_map
 
 
 class ScaleHookFactoryCorrCoef:
@@ -38,7 +38,9 @@ class ScaleHookFactoryCorrCoef:
             if self.input_samples[name] is None:
                 self.input_samples[name] = x
             else:
-                self.input_samples[name] = torch.cat([self.input_samples[name], x], dim=0)
+                self.input_samples[name] = torch.cat(
+                    [self.input_samples[name], x], dim=0
+                )
 
         return scale_hook
 
@@ -79,7 +81,9 @@ def collect_rxx(model_name, device_map, target_layers: list[str]):
     hook_factory = ScaleHookFactoryCorrCoef()
     for name, layer in model.named_modules():
         if any(re.match(pattern, name) for pattern in target_layers):
-            hook_factory.handles.append(layer.register_forward_hook(hook_factory.get_scale_hook(name)))
+            hook_factory.handles.append(
+                layer.register_forward_hook(hook_factory.get_scale_hook(name))
+            )
             registered_layers.append(name)
 
     print(f"Registered layers: {registered_layers}")
@@ -121,7 +125,9 @@ if __name__ == "__main__":
     ]
 
     for model_name in model_names:
-        corrcoef = collect_rxx(model_name, device_map="auto-balanced", target_layers=target_layers)
+        corrcoef = collect_rxx(
+            model_name, device_map="auto-balanced", target_layers=target_layers
+        )
         model_name_escape = model_name.replace("/", "_")
         save_path = f"corrcoef_{model_name_escape}_{timestamp}.safetensors"
         save_file(corrcoef, save_path)

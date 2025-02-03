@@ -1,19 +1,44 @@
 import logging
 
 import torch
-from transformers.models.llama.modeling_llama import LlamaForCausalLM, LlamaForSequenceClassification
-from transformers.models.opt.modeling_opt import OPTForCausalLM, OPTForSequenceClassification
-from transformers.models.mistral.modeling_mistral import MistralForCausalLM, MistralForSequenceClassification
-from transformers.models.gemma2.modeling_gemma2 import Gemma2ForCausalLM, Gemma2ForSequenceClassification
-from transformers.models.phi3.modeling_phi3 import Phi3ForCausalLM, Phi3ForSequenceClassification
-from transformers.models.deberta_v2.modeling_deberta_v2 import DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM
-from transformers.models.roberta.modeling_roberta import RobertaForSequenceClassification, RobertaForMaskedLM
+from transformers.models.llama.modeling_llama import (
+    LlamaForCausalLM,
+    LlamaForSequenceClassification,
+)
+from transformers.models.opt.modeling_opt import (
+    OPTForCausalLM,
+    OPTForSequenceClassification,
+)
+from transformers.models.mistral.modeling_mistral import (
+    MistralForCausalLM,
+    MistralForSequenceClassification,
+)
+from transformers.models.gemma2.modeling_gemma2 import (
+    Gemma2ForCausalLM,
+    Gemma2ForSequenceClassification,
+)
+from transformers.models.phi3.modeling_phi3 import (
+    Phi3ForCausalLM,
+    Phi3ForSequenceClassification,
+)
+from transformers.models.deberta_v2.modeling_deberta_v2 import (
+    DebertaV2ForSequenceClassification,
+    DebertaV2ForMaskedLM,
+)
+from transformers.models.roberta.modeling_roberta import (
+    RobertaForSequenceClassification,
+    RobertaForMaskedLM,
+)
 from .llama_decoder import (
     quantize_llama_model,
     find_layers_to_approximate_llama,
     find_layers_to_register_scale_hook_llama,
 )
-from .opt_decoder import quantize_opt_model, find_layers_to_approximate_opt, find_layers_to_register_scale_hook_opt
+from .opt_decoder import (
+    quantize_opt_model,
+    find_layers_to_approximate_opt,
+    find_layers_to_register_scale_hook_opt,
+)
 from .mistral_decoder import (
     quantize_mistral_model,
     find_layers_to_approximate_mistral,
@@ -34,27 +59,31 @@ from .deberta_v2 import (
     find_layers_to_approximate_deberta_v2,
     find_layers_to_register_scale_hook_deberta_v2,
 )
-from .roberta import quantize_roberta, find_layers_to_register_scale_hook_roberta, find_layers_to_approximate_roberta
+from .roberta import (
+    quantize_roberta,
+    find_layers_to_register_scale_hook_roberta,
+    find_layers_to_approximate_roberta,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @torch.no_grad()
-def quantize_model(model, loqer_config) -> None:
+def quantize_model(model, qera_config) -> None:
     if isinstance(model, (LlamaForCausalLM, LlamaForSequenceClassification)):
-        q_model = quantize_llama_model(model, loqer_config)
+        q_model = quantize_llama_model(model, qera_config)
     elif isinstance(model, (OPTForCausalLM, OPTForSequenceClassification)):
-        q_model = quantize_opt_model(model, loqer_config)
+        q_model = quantize_opt_model(model, qera_config)
     elif isinstance(model, (MistralForCausalLM, MistralForSequenceClassification)):
-        q_model = quantize_mistral_model(model, loqer_config)
+        q_model = quantize_mistral_model(model, qera_config)
     elif isinstance(model, (Gemma2ForCausalLM, Gemma2ForSequenceClassification)):
-        q_model = quantize_gemma2_model(model, loqer_config)
+        q_model = quantize_gemma2_model(model, qera_config)
     elif isinstance(model, (Phi3ForCausalLM, Phi3ForSequenceClassification)):
-        q_model = quantize_phi3_model(model, loqer_config)
+        q_model = quantize_phi3_model(model, qera_config)
     elif isinstance(model, (DebertaV2ForSequenceClassification, DebertaV2ForMaskedLM)):
-        q_model = quantize_deberta_v2(model, loqer_config)
+        q_model = quantize_deberta_v2(model, qera_config)
     elif isinstance(model, (RobertaForSequenceClassification, RobertaForMaskedLM)):
-        q_model = quantize_roberta(model, loqer_config)
+        q_model = quantize_roberta(model, qera_config)
     else:
         msg = f"Model {type(model).__name__} not supported for quantization"
         raise NotImplementedError(msg)

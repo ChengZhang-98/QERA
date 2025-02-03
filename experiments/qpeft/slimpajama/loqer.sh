@@ -1,6 +1,6 @@
 model_name=meta-llama/Llama-2-7b-hf
 task="slim_pajama_100m"
-adapter_init="loqer"
+adapter_init="qera"
 lora_rank=8
 quant_type="fp"
 quant_bits=4

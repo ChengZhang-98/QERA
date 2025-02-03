@@ -1,5 +1,5 @@
 model_name=meta-llama/Llama-2-7b-hf
-adapt_init=loqer
+adapt_init=qera
 lora_rank=128
 quant_type=fp
 quant_bits=4

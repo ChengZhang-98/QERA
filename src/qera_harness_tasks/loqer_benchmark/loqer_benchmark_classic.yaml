@@ -1,4 +1,4 @@
-group: loqer_benchmark_classic
+group: qera_benchmark_classic
 task:
   - task: boolq
     num_fewshot: 0

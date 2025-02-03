@@ -7,17 +7,17 @@ function check_rval {
     fi
 }
 
-cd ~/Projects/LoQER/
-check_rval "cd ~/Projects/LoQER"
+cd ~/Projects/QERA/
+check_rval "cd ~/Projects/QERA"
 
 scaling_mode="diag"
 model_name=meta-llama/Llama-3.1-8B
 model_name_esc=$(echo $model_name | sed 's/\//-/g')
 
 if [[ $scaling_mode == "w-only" ]]; then
-    other_args="--disable-loqer"
+    other_args="--disable-qera"
 else
-    other_args="--loqer-scaling-mode $scaling_mode"
+    other_args="--qera-scaling-mode $scaling_mode"
 fi
 
 HF_HUB_OFFLINE=1 python ptq_pipeline.py experiments/configs/w-only-uniform-rank.yaml \

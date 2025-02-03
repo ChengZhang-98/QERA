@@ -65,10 +65,14 @@ from peft.utils.loftq_utils import _SafetensorLoader
 
 logger = get_logger(__name__)
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt")
+require_version(
+    "datasets>=1.8.0",
+    "To fix: pip install -r examples/pytorch/language-modeling/requirements.txt",
+)
 
 MODEL_CONFIG_CLASSES = list(MODEL_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
 
 def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tensor:
     """
@@ -78,15 +82,23 @@ def _compute_scale_inv_dot_U(scale: torch.Tensor, U: torch.Tensor) -> torch.Tens
     Refer to https://pytorch.org/docs/stable/generated/torch.linalg.inv.html
     """
     if scale.ndim == 1:
-        scale = torch.where(scale <= 0, torch.ones_like(scale) * torch.finfo(scale.dtype).eps, scale)
+        scale = torch.where(
+            scale <= 0, torch.ones_like(scale) * torch.finfo(scale.dtype).eps, scale
+        )
         return torch.linalg.solve(torch.diag(scale), U)
     elif scale.ndim == 2:
         try:
             return torch.linalg.solve(scale, U)
         except RuntimeError as e:
-            logger.warning(f"Matrix inversion failed: {e} Adding turbulence to the scale matrix")
+            logger.warning(
+                f"Matrix inversion failed: {e} Adding turbulence to the scale matrix"
+            )
             U_scale, S_scale, V_T_scale = torch.linalg.svd(scale)
-            S_scale = torch.where(S_scale <= 0, torch.ones_like(S_scale) * torch.finfo(S_scale.dtype).eps, S_scale)
+            S_scale = torch.where(
+                S_scale <= 0,
+                torch.ones_like(S_scale) * torch.finfo(S_scale.dtype).eps,
+                S_scale,
+            )
             scale = U_scale @ torch.diag(S_scale) @ V_T_scale
             return torch.linalg.solve(scale, U)
     else:
@@ -99,7 +111,9 @@ def _low_rank_decomposition(weight, reduced_rank=32):
     """
     matrix_dimension = len(weight.size())
     if matrix_dimension != 2:
-        raise ValueError(f"Only support 2D matrix, but your input has {matrix_dimension} dimensions.")
+        raise ValueError(
+            f"Only support 2D matrix, but your input has {matrix_dimension} dimensions."
+        )
 
     # Use SVD to decompose a matrix, default full_matrices is False to save parameters
     U, S, Vh = torch.linalg.svd(weight, full_matrices=False)
@@ -120,7 +134,9 @@ def _loftq_init_new(qweight, weight, num_bits: int, reduced_rank: int, scale=Non
         raise ValueError("bitsandbytes 4bit quantization is not available.")
 
     compute_device = "cuda"
-    dequantized_weight = bnb.functional.dequantize_4bit(qweight.data, qweight.quant_state)
+    dequantized_weight = bnb.functional.dequantize_4bit(
+        qweight.data, qweight.quant_state
+    )
 
     weight = weight.to(device=compute_device, dtype=torch.float32)
     residual = weight - dequantized_weight
@@ -129,28 +145,34 @@ def _loftq_init_new(qweight, weight, num_bits: int, reduced_rank: int, scale=Non
     if scale is None:
         output = _low_rank_decomposition(residual, reduced_rank=reduced_rank)
     else:
-        output = _low_rank_loqer_decomposition(residual, scale=scale, reduced_rank=reduced_rank)
+        output = _low_rank_qera_decomposition(
+            residual, scale=scale, reduced_rank=reduced_rank
+        )
     L, R, reduced_rank = output["L"], output["R"], output["reduced_rank"]
     return R, L
 
-    
-def _low_rank_loqer_decomposition(weight, scale, reduced_rank=32):
+
+def _low_rank_qera_decomposition(weight, scale, reduced_rank=32):
     """
     :param weight: The matrix to decompose, of shape (H, W) :param reduced_rank: the final rank :return:
     """
     matrix_dimension = len(weight.size())
     if matrix_dimension != 2:
-        raise ValueError(f"Only support 2D matrix, but your input has {matrix_dimension} dimensions.")   
+        raise ValueError(
+            f"Only support 2D matrix, but your input has {matrix_dimension} dimensions."
+        )
 
     scale = scale.to(weight.dtype).to(weight.device)
     if scale.ndim == 1:
-        assert scale.shape[0] == weight.shape[1], "Scale must have the same number of elements as the weight"
+        assert (
+            scale.shape[0] == weight.shape[1]
+        ), "Scale must have the same number of elements as the weight"
         scaled_q_error_T = torch.diag(scale) @ weight.transpose(0, 1)
     elif scale.ndim == 2:
         assert scale.shape[0] == scale.shape[1], "Scale must be a square matrix"
         scaled_q_error_T = scale @ weight.transpose(0, 1)
     else:
-        raise ValueError("Scale must be either a vector (diagonal) or a matrix") 
+        raise ValueError("Scale must be either a vector (diagonal) or a matrix")
 
     # Use SVD to decompose a matrix, default full_matrices is False to save parameters
     U, S, V_T = torch.linalg.svd(scaled_q_error_T, full_matrices=False)
@@ -161,12 +183,23 @@ def _low_rank_loqer_decomposition(weight, scale, reduced_rank=32):
 
     if scale.ndim == 1:
         A_T = _compute_scale_inv_dot_U(scale, U)
-        B_T = torch.diag(S) @ V_T # ab_quantizer(torch.diag(S) @ V_T) # TODO: since AB is not quantized, does that mean we don't need the ab_quantizer?
+        B_T = (
+            torch.diag(S) @ V_T
+        )  # ab_quantizer(torch.diag(S) @ V_T) # TODO: since AB is not quantized, does that mean we don't need the ab_quantizer?
     elif scale.ndim == 2:
         A_T = _compute_scale_inv_dot_U(scale, U)
-        B_T = torch.diag(S) @ V_T # ab_quantizer(torch.diag(S) @ V_T) # TODO: since AB is not quantized, does that mean we don't need the ab_quantizer?
+        B_T = (
+            torch.diag(S) @ V_T
+        )  # ab_quantizer(torch.diag(S) @ V_T) # TODO: since AB is not quantized, does that mean we don't need the ab_quantizer?
 
-    return {"L": B_T.T, "R": A_T.T, "U": U, "S": S, "Vh": V_T, "reduced_rank": reduced_rank}
+    return {
+        "L": B_T.T,
+        "R": A_T.T,
+        "U": U,
+        "S": S,
+        "Vh": V_T,
+        "reduced_rank": reduced_rank,
+    }
 
 
 @torch.no_grad()
@@ -207,7 +240,9 @@ def replace_lora_weights_loftq(
             yields incremental improvements.
     """
     if not is_bnb_4bit_available():
-        raise ValueError("bitsandbytes must be installed and the model must be quantized in 4bits.")
+        raise ValueError(
+            "bitsandbytes must be installed and the model must be quantized in 4bits."
+        )
 
     from peft.tuners.lora import Linear4bit
 
@@ -217,7 +252,9 @@ def replace_lora_weights_loftq(
     safetensor_loader = _SafetensorLoader(peft_model, model_path)
 
     # if too slow, consider adding tqdm as an option
-    for name, module in tqdm(peft_model.named_modules(), desc="Computing low-rank A and B from scale"):
+    for name, module in tqdm(
+        peft_model.named_modules(), desc="Computing low-rank A and B from scale"
+    ):
         if not isinstance(module, Linear4bit):
             continue
 
@@ -231,9 +268,17 @@ def replace_lora_weights_loftq(
             name = name[len(prefix) :]
             tensor = safetensor_loader.get_tensor(name + ".weight")
             reduced_rank = module.r[adapter_name]
-            scale = AB_dict[name + ".scale"] # name example: "model.layers.0.self_attn.o_proj.scale"
-            lora_A, lora_B = _loftq_init_new(module.weight, tensor, num_bits=4, reduced_rank=reduced_rank, scale=scale)
-            ###### Directly replace the weights with Loqer AB_dict ######
+            scale = AB_dict[
+                name + ".scale"
+            ]  # name example: "model.layers.0.self_attn.o_proj.scale"
+            lora_A, lora_B = _loftq_init_new(
+                module.weight,
+                tensor,
+                num_bits=4,
+                reduced_rank=reduced_rank,
+                scale=scale,
+            )
+            ###### Directly replace the weights with QERA AB_dict ######
             #     lora_A = AB_dict[name + ".A"].T # name example: "model.layers.0.self_attn.o_proj.A"
             #     lora_B = AB_dict[name + ".B"].T
             #     device = module.lora_A[adapter_name].weight.device
@@ -244,7 +289,9 @@ def replace_lora_weights_loftq(
             tensor = safetensor_loader.get_tensor(name + ".weight")
 
             reduced_rank = module.r[adapter_name]
-            lora_A, lora_B = _loftq_init_new(module.weight, tensor, num_bits=4, reduced_rank=reduced_rank)
+            lora_A, lora_B = _loftq_init_new(
+                module.weight, tensor, num_bits=4, reduced_rank=reduced_rank
+            )
         if not callback:
             module.lora_A[adapter_name].weight.data = lora_A
             module.lora_B[adapter_name].weight.data = lora_B
@@ -269,7 +316,9 @@ def replace_lora_weights_loftq(
 
 def loftQ_parse_args(parser, use_existing_parser=False):
     if not use_existing_parser:
-        parser = argparse.ArgumentParser(description="Finetune a transformers model on a causal language modeling task")
+        parser = argparse.ArgumentParser(
+            description="Finetune a transformers model on a causal language modeling task"
+        )
 
     parser.add_argument(
         "--dataset_name",
@@ -284,10 +333,16 @@ def loftQ_parse_args(parser, use_existing_parser=False):
         help="The configuration name of the dataset to use (via the datasets library).",
     )
     parser.add_argument(
-        "--train_file", type=str, default=None, help="A csv, txt or a json file containing the training data."
+        "--train_file",
+        type=str,
+        default=None,
+        help="A csv, txt or a json file containing the training data.",
     )
     parser.add_argument(
-        "--validation_file", type=str, default=None, help="A csv, txt or a json file containing the validation data."
+        "--validation_file",
+        type=str,
+        default=None,
+        help="A csv, txt or a json file containing the validation data.",
     )
     parser.add_argument(
         "--validation_split_percentage",
@@ -335,8 +390,15 @@ def loftQ_parse_args(parser, use_existing_parser=False):
         default=5e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay to use.")
-    parser.add_argument("--num_train_epochs", type=int, default=3, help="Total number of training epochs to perform.")
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.0, help="Weight decay to use."
+    )
+    parser.add_argument(
+        "--num_train_epochs",
+        type=int,
+        default=3,
+        help="Total number of training epochs to perform.",
+    )
     parser.add_argument(
         "--max_train_steps",
         type=int,
@@ -354,13 +416,27 @@ def loftQ_parse_args(parser, use_existing_parser=False):
         type=SchedulerType,
         default="linear",
         help="The scheduler type to use.",
-        choices=["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"],
+        choices=[
+            "linear",
+            "cosine",
+            "cosine_with_restarts",
+            "polynomial",
+            "constant",
+            "constant_with_warmup",
+        ],
     )
     parser.add_argument(
-        "--num_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
+        "--num_warmup_steps",
+        type=int,
+        default=0,
+        help="Number of steps for the warmup in the lr scheduler.",
     )
-    parser.add_argument("--output_dir", type=str, default=None, help="Where to store the final model.")
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
+    parser.add_argument(
+        "--output_dir", type=str, default=None, help="Where to store the final model."
+    )
+    parser.add_argument(
+        "--seed", type=int, default=None, help="A seed for reproducible training."
+    )
     parser.add_argument(
         "--model_type",
         type=str,
@@ -405,16 +481,28 @@ def loftQ_parse_args(parser, use_existing_parser=False):
         help="The number of processes to use for the preprocessing.",
     )
     parser.add_argument(
-        "--overwrite_cache", action="store_true", help="Overwrite the cached training and evaluation sets"
+        "--overwrite_cache",
+        action="store_true",
+        help="Overwrite the cached training and evaluation sets",
     )
     parser.add_argument(
-        "--no_keep_linebreaks", action="store_true", help="Do not keep line breaks when using TXT files."
+        "--no_keep_linebreaks",
+        action="store_true",
+        help="Do not keep line breaks when using TXT files.",
     )
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument(
-        "--hub_model_id", type=str, help="The name of the repository to keep in sync with the local `output_dir`."
+        "--push_to_hub",
+        action="store_true",
+        help="Whether or not to push the model to the Hub.",
     )
-    parser.add_argument("--hub_token", type=str, help="The token to use to push to the Model Hub.")
+    parser.add_argument(
+        "--hub_model_id",
+        type=str,
+        help="The name of the repository to keep in sync with the local `output_dir`.",
+    )
+    parser.add_argument(
+        "--hub_token", type=str, help="The token to use to push to the Model Hub."
+    )
     parser.add_argument(
         "--trust_remote_code",
         type=bool,
@@ -470,7 +558,12 @@ def loftQ_parse_args(parser, use_existing_parser=False):
         help="temperature of 1.0 has no effect, lower tend toward greedy sampling",
     )
     parser.add_argument("--k", type=int, default=40, help="Choose k candidate words")
-    parser.add_argument("--p", type=float, default=0.95, help="The sum of probability of candidate words is 0.9 ")
+    parser.add_argument(
+        "--p",
+        type=float,
+        default=0.95,
+        help="The sum of probability of candidate words is 0.9 ",
+    )
 
     ##########################
     #        Exp Args        #
@@ -534,18 +627,32 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
 
     Returns (model | None): The fine-tuned model for further evaluation.
     """
-    if args.dataset_name is None and args.train_file is None and args.validation_file is None:
+    if (
+        args.dataset_name is None
+        and args.train_file is None
+        and args.validation_file is None
+    ):
         raise ValueError("Need either a dataset name or a training/validation file.")
     else:
         if args.train_file is not None:
             extension = args.train_file.split(".")[-1]
-            assert extension in ["csv", "json", "txt"], "`train_file` should be a csv, json or txt file."
+            assert extension in [
+                "csv",
+                "json",
+                "txt",
+            ], "`train_file` should be a csv, json or txt file."
         if args.validation_file is not None:
             extension = args.validation_file.split(".")[-1]
-            assert extension in ["csv", "json", "txt"], "`validation_file` should be a csv, json or txt file."
+            assert extension in [
+                "csv",
+                "json",
+                "txt",
+            ], "`validation_file` should be a csv, json or txt file."
 
     if args.push_to_hub:
-        assert args.output_dir is not None, "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
+        assert (
+            args.output_dir is not None
+        ), "Need an `output_dir` to create a repo when `--push_to_hub` is passed."
     # args = parse_args()
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
@@ -561,7 +668,10 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         accelerator_log_kwargs["log_with"] = args.report_to
         accelerator_log_kwargs["project_dir"] = args.output_dir
 
-    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps, **accelerator_log_kwargs)
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        **accelerator_log_kwargs,
+    )
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
@@ -651,27 +761,45 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
                 **dataset_args,
             )
 
-
     ##########################
     #       Peft Model       #
     ##########################
     # Download weights and configure LoRA
     if args.adapter_name_or_path is None:
         # model = PeftModel.from_pretrained(model, args.model_name_or_path, subfolder="loftq_init", is_trainable=True)
-        if any(name in args.model_name_or_path.lower() for name in ["llama", "mistral", "falcon"]):
+        if any(
+            name in args.model_name_or_path.lower()
+            for name in ["llama", "mistral", "falcon"]
+        ):
             # model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path, trust_remote_code=True)
             task_type = TaskType.CAUSAL_LM
-            target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+            target_modules = [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "up_proj",
+                "down_proj",
+                "gate_proj",
+            ]
 
         elif any(name in args.model_name_or_path.lower() for name in ["bart", "t5"]):
             # model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name_or_path)
             task_type = TaskType.SEQ_2_SEQ_LM
             target_modules = ["q_proj", "k_proj", "v_proj", "fc1", "fc2", "out_proj"]
 
-        elif any(name in args.model_name_or_path.lower() for name in ["deberta", "roberta", "bert"]):
+        elif any(
+            name in args.model_name_or_path.lower()
+            for name in ["deberta", "roberta", "bert"]
+        ):
             # model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path)
             task_type = TaskType.SEQ_CLS
-            target_modules = ["query_proj", "key_proj", "value_proj", "dense"]  # embeddings not supported by peft
+            target_modules = [
+                "query_proj",
+                "key_proj",
+                "value_proj",
+                "dense",
+            ]  # embeddings not supported by peft
         else:
             raise NotImplementedError("Other models not supported yet.")
 
@@ -689,11 +817,20 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             model = get_peft_model(model, lora_config)
             replace_lora_weights_loftq(model, AB_dict=AB_dict)
         else:
-            logger.warning("AB_dict is None. The model will use the LoftQ initialization.")
-            model = PeftModel.from_pretrained(model, args.model_name_or_path, subfolder="loftq_init", is_trainable=True)
+            logger.warning(
+                "AB_dict is None. The model will use the LoftQ initialization."
+            )
+            model = PeftModel.from_pretrained(
+                model,
+                args.model_name_or_path,
+                subfolder="loftq_init",
+                is_trainable=True,
+            )
             # replace_lora_weights_loftq(model) # QLORA
     else:
-        model = PeftModel.from_pretrained(model, args.adapter_name_or_path, is_trainable=True)
+        model = PeftModel.from_pretrained(
+            model, args.adapter_name_or_path, is_trainable=True
+        )
     model.print_trainable_parameters()
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
@@ -727,7 +864,10 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         sources = examples[source_column]
         targets = examples[target_column]
 
-        inputs = [prompt_process(source, target, prompt_2=task_prompt) for (source, target) in zip(sources, targets)]
+        inputs = [
+            prompt_process(source, target, prompt_2=task_prompt)
+            for (source, target) in zip(sources, targets)
+        ]
 
         model_inputs = tokenizer(
             inputs,
@@ -759,8 +899,12 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
 
         inputs = [source + task_prompt for source in sources]
 
-        model_inputs = tokenizer(inputs, max_length=args.max_source_length, padding=padding, truncation=True)
-        labels = tokenizer(labels, max_length=args.max_target_length, padding=padding, truncation=True)
+        model_inputs = tokenizer(
+            inputs, max_length=args.max_source_length, padding=padding, truncation=True
+        )
+        labels = tokenizer(
+            labels, max_length=args.max_target_length, padding=padding, truncation=True
+        )
 
         model_inputs["labels"] = labels["input_ids"]
 
@@ -793,10 +937,15 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
 
     # DataLoaders creation:
     train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=args.per_device_train_batch_size
+        train_dataset,
+        shuffle=True,
+        collate_fn=default_data_collator,
+        batch_size=args.per_device_train_batch_size,
     )
     eval_dataloader = DataLoader(
-        eval_dataset, collate_fn=default_data_collator, batch_size=args.per_device_eval_batch_size
+        eval_dataset,
+        collate_fn=default_data_collator,
+        batch_size=args.per_device_eval_batch_size,
     )
 
     # Optimizer
@@ -804,11 +953,19 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
     no_decay = ["bias", "layer_norm.weight"]
     optimizer_grouped_parameters = [
         {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay) and "lora" in n],
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if not any(nd in n for nd in no_decay) and "lora" in n
+            ],
             "weight_decay": args.weight_decay,
         },
         {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "params": [
+                p
+                for n, p in model.named_parameters()
+                if any(nd in n for nd in no_decay)
+            ],
             "weight_decay": 0.0,
         },
     ]
@@ -816,7 +973,9 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(
+        len(train_dataloader) / args.gradient_accumulation_steps
+    )
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
@@ -829,8 +988,10 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
     )
 
     # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = (
+        accelerator.prepare(
+            model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
+        )
     )
 
     # On TPU, the tie weights in our model have been disconnected, so we need to restore the ties.
@@ -838,7 +999,9 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         model.tie_weights()
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(
+        len(train_dataloader) / args.gradient_accumulation_steps
+    )
     if overrode_max_train_steps:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     # Afterwards we recalculate our number of training epochs
@@ -855,23 +1018,37 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         experiment_config = vars(args)
         # TensorBoard cannot log Enums, need the raw value
         if type(experiment_config["lr_scheduler_type"]) is str:
-            experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"]
+            experiment_config["lr_scheduler_type"] = experiment_config[
+                "lr_scheduler_type"
+            ]
         else:
-            experiment_config["lr_scheduler_type"] = experiment_config["lr_scheduler_type"].value
+            experiment_config["lr_scheduler_type"] = experiment_config[
+                "lr_scheduler_type"
+            ].value
         accelerator.init_trackers("clm_no_trainer", experiment_config)
 
     # Train!
-    total_batch_size = args.per_device_train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_batch_size = (
+        args.per_device_train_batch_size
+        * accelerator.num_processes
+        * args.gradient_accumulation_steps
+    )
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = {args.per_device_train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(
+        f"  Instantaneous batch size per device = {args.per_device_train_batch_size}"
+    )
+    logger.info(
+        f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}"
+    )
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(
+        range(args.max_train_steps), disable=not accelerator.is_local_main_process
+    )
     completed_steps = 0
     starting_epoch = 0
 
@@ -884,7 +1061,9 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             # Get the most recent checkpoint
             dirs = [f.name for f in os.scandir(os.getcwd()) if f.is_dir()]
             dirs.sort(key=os.path.getctime)
-            path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
+            path = dirs[
+                -1
+            ]  # Sorts folders by date modified, most recent checkpoint is the last
             checkpoint_path = path
             path = os.path.basename(checkpoint_path)
 
@@ -899,7 +1078,10 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             completed_steps = starting_epoch * num_update_steps_per_epoch
         else:
             # need to multiply `gradient_accumulation_steps` to reflect real steps
-            resume_step = int(training_difference.replace("step_", "")) * args.gradient_accumulation_steps
+            resume_step = (
+                int(training_difference.replace("step_", ""))
+                * args.gradient_accumulation_steps
+            )
             starting_epoch = resume_step // len(train_dataloader)
             resume_step -= starting_epoch * len(train_dataloader)
             completed_steps = resume_step // args.gradient_accumulation_steps
@@ -911,9 +1093,15 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         model.train()
         if args.with_tracking:
             total_loss = 0
-        if args.resume_from_checkpoint and epoch == starting_epoch and resume_step is not None:
+        if (
+            args.resume_from_checkpoint
+            and epoch == starting_epoch
+            and resume_step is not None
+        ):
             # We skip the first `n` batches in the dataloader when resuming from a checkpoint
-            active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_step)
+            active_dataloader = accelerator.skip_first_batches(
+                train_dataloader, resume_step
+            )
         else:
             active_dataloader = train_dataloader
         for step, batch in enumerate(active_dataloader):
@@ -925,7 +1113,9 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
                     total_loss += loss.detach().float()
                 accelerator.backward(loss)
                 if completed_steps % 50:
-                    accelerator.print(f"Epoch: {epoch} | Step: {completed_steps} | Loss: {loss}")
+                    accelerator.print(
+                        f"Epoch: {epoch} | Step: {completed_steps} | Loss: {loss}"
+                    )
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -966,18 +1156,29 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             with torch.no_grad():
                 gen_kwargs["input_ids"] = batch["input_ids"]
                 gen_kwargs["attention_mask"] = batch["attention_mask"]
-                generated_tokens = accelerator.unwrap_model(model).generate(**gen_kwargs)
+                generated_tokens = accelerator.unwrap_model(model).generate(
+                    **gen_kwargs
+                )
 
             pred_tokens = generated_tokens[:, args.max_source_length :]
-            pred_tokens = accelerator.pad_across_processes(pred_tokens, dim=1, pad_index=tokenizer.pad_token_id)
+            pred_tokens = accelerator.pad_across_processes(
+                pred_tokens, dim=1, pad_index=tokenizer.pad_token_id
+            )
             gold_tokens = batch["labels"]
 
             if not args.pad_to_max_length:
                 # If we did not pad to max length, we need to pad the labels too
-                gold_tokens = accelerator.pad_across_processes(batch["labels"], dim=1, pad_index=tokenizer.pad_token_id)
+                gold_tokens = accelerator.pad_across_processes(
+                    batch["labels"], dim=1, pad_index=tokenizer.pad_token_id
+                )
 
-            pred_tokens, gold_tokens = accelerator.gather_for_metrics((pred_tokens, gold_tokens))
-            pred_tokens, gold_tokens = pred_tokens.cpu().numpy(), gold_tokens.cpu().numpy()
+            pred_tokens, gold_tokens = accelerator.gather_for_metrics(
+                (pred_tokens, gold_tokens)
+            )
+            pred_tokens, gold_tokens = (
+                pred_tokens.cpu().numpy(),
+                gold_tokens.cpu().numpy(),
+            )
 
             if isinstance(pred_tokens, tuple):
                 pred_tokens = pred_tokens[0]
@@ -986,8 +1187,12 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
 
             # Extract the numbers in sentences
             accelerator.print(decoded_pred)
-            ans_pred_list += [extract_answer_number(sentence_pred) for sentence_pred in decoded_pred]
-            ans_gold_list += [extract_answer_number(sentence_gold) for sentence_gold in decoded_gold]
+            ans_pred_list += [
+                extract_answer_number(sentence_pred) for sentence_pred in decoded_pred
+            ]
+            ans_gold_list += [
+                extract_answer_number(sentence_gold) for sentence_gold in decoded_gold
+            ]
 
         accelerator.print(ans_pred_list)
         accelerator.print(ans_gold_list)
@@ -1010,7 +1215,9 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
             accelerator.wait_for_everyone()
             unwrapped_model = accelerator.unwrap_model(model)
             unwrapped_model.save_pretrained(
-                args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
+                args.output_dir,
+                is_main_process=accelerator.is_main_process,
+                save_function=accelerator.save,
             )
             if accelerator.is_main_process:
                 tokenizer.save_pretrained(args.output_dir)
@@ -1034,7 +1241,9 @@ def loftQ_fine_tuning(args, model, tokenizer, AB_dict):
         accelerator.wait_for_everyone()
         unwrapped_model = accelerator.unwrap_model(model)
         unwrapped_model.save_pretrained(
-            args.output_dir, is_main_process=accelerator.is_main_process, save_function=accelerator.save
+            args.output_dir,
+            is_main_process=accelerator.is_main_process,
+            save_function=accelerator.save,
         )
         if accelerator.is_main_process:
             tokenizer.save_pretrained(args.output_dir)

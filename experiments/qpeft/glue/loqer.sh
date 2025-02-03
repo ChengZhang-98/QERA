@@ -1,4 +1,4 @@
-workdir=~/Projects/LoQER/experiments/jamie/peft_cls
+workdir=~/Projects/QERA/experiments/jamie/peft_cls
 cd $workdir
 
 function check_return_value() {
@@ -15,6 +15,6 @@ quant_bits=4
 seed=42
 for task in ${task_list[@]}; do
     cd $workdir
-    bash ./adapt_and_glue_train.sh Anonymous-Pineapple/roberta-base $task loqer $rank $quant_type $quant_bits $seed
-    check_return_value "loqer $task"
+    bash ./adapt_and_glue_train.sh Anonymous-Pineapple/roberta-base $task qera $rank $quant_type $quant_bits $seed
+    check_return_value "qera $task"
 done

@@ -14,7 +14,7 @@ from transformers import set_seed
 from tqdm import tqdm
 from threadpoolctl import threadpool_limits
 
-from loqer.statistic_profiler.scale import sqrtm_newton_schulz
+from qera.statistic_profiler.scale import sqrtm_newton_schulz
 
 
 def compute_sqrtm_cuda(A, numIters=200):
