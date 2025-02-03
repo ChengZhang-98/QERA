@@ -1,6 +1,3 @@
-workdir=~/Projects/QERA/experiments/jamie/peft_cls
-cd $workdir
-
 function check_return_value() {
     if [[ $? -ne 0 ]]; then
         echo "❌ $1 failed."

@@ -1,4 +1,4 @@
-workdir=~/Projects/QERA
+workdir=../../../
 ckpt_dir=$workdir/checkpoints/slimpajama
 env_name=qera
 cd $workdir

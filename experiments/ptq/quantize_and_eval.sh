@@ -7,8 +7,8 @@ function check_rval {
     fi
 }
 
-cd ~/Projects/QERA/
-check_rval "cd ~/Projects/QERA"
+cd ../../
+check_rval "cd to project root"
 
 scaling_mode="diag"
 model_name=meta-llama/Llama-3.1-8B

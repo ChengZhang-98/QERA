@@ -1,5 +1,5 @@
 # envs
-workdir=~/Projects/QERA
+workdir=../../../
 ckpt_dir=$workdir/checkpoints/glue
 env_name=qera
 cd $workdir
