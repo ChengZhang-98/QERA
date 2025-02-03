@@ -7,7 +7,7 @@ import transformers
 from accelerate import dispatch_model
 
 from qera.datasets import get_data_module
-from qera.models import find_layers_to_approximate, find_layers_to_register_scale_hook
+from qera.models import find_layers_to_register_scale_hook
 from qera.statistic_profiler import register_scale_hooks
 from qera.evaluate import evaluate_perplexity
 

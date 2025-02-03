@@ -8,8 +8,6 @@ from accelerate import dispatch_model
 from tqdm import tqdm
 
 from qera.datasets import get_data_module
-from qera.models import find_layers_to_approximate, find_layers_to_register_scale_hook
-from qera.statistic_profiler import register_scale_hooks
 from qera.evaluate import evaluate_perplexity
 
 from qera.utils import create_device_map

@@ -21,7 +21,6 @@ import math
 import os
 import random
 from pathlib import Path
-import yaml
 import json
 
 import datasets
@@ -45,17 +44,12 @@ from transformers import (
     SchedulerType,
     default_data_collator,
     get_scheduler,
-    BitsAndBytesConfig,
 )
-from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 from peft import (
     PeftModel,
     prepare_model_for_kbit_training,
-    PeftConfig,
-    LoraConfig,
-    get_peft_model,
 )
 
 

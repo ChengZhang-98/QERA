@@ -5,13 +5,12 @@ import yaml
 from pprint import pformat
 import shutil
 import time
-import types
 
 import torch
 from torch.utils.data import DataLoader
 import transformers
 from transformers import BitsAndBytesConfig
-from peft import get_peft_model, LoraConfig, prepare_model_for_kbit_training
+from peft import get_peft_model, LoraConfig
 from peft import TaskType
 from accelerate import dispatch_model
 
