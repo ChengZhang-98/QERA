@@ -148,7 +148,7 @@ def pipeline_qera():
         "--qera-scaling-mode",
         dest="qera_scaling_mode",
         type=str,
-        help="QERA scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed'].",
+        help="QERA scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'lqer'].",
         default=None,
         choices=[
             "diagonal",
@@ -156,7 +156,6 @@ def pipeline_qera():
             "rxx",
             "identity",
             "lqer",
-            "mixed",
         ],  # "diag" is alias of "diagonal"
     )
     parser.add_argument(
@@ -1117,14 +1116,13 @@ def pipeline_qera_chunked():
         "--qera-scaling-mode",
         dest="qera_scaling_mode",
         type=str,
-        help="QERA scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'mixed', 'lqer'].",
+        help="QERA scaling mode, one of ['diagonal', 'diag', 'rxx', 'identity', 'lqer'].",
         default=None,
         choices=[
             "diagonal",
             "diag",
             "rxx",
             "identity",
-            "mixed",
             "lqer",
         ],  # "diag" is alias of "diagonal"
     )
