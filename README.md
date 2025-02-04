@@ -15,9 +15,6 @@
 </h5>
 
 This is the official implementation of the ICLR'25 paper "QERA: an Analytical Framework for Quantization Error Reconstruction".
-In this paper, we solve the following problem:
-
-Given a trained layer $\mathbf{y}=\mathbf{x}W$, QERA derives the closed-form solution to the matrix $C_k$ in $\tilde{\mathbf{y}}=\mathbf{x}(W_q + C_k)$, where $W_q$ is the approximated weight matrix (high-rank but low-precision/sparse/...) and $C_k$ is low-rank but high-precision., to minimize the expectation of the layer output error $E[\Vert \tilde{\mathbf{y}} - \mathbf{y} \Vert_2^2]$.
 
 ## Env Setup
 
