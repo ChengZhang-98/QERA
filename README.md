@@ -1,10 +1,23 @@
 # QERA: an Analytical Framework for Quantization Error Reconstruction
 
-[[paper]](https://arxiv.org/abs/2410.06040)
+<h5 align="center">
 
-🍍 This is the official implementation of the ICLR'25 paper "QERA: an Analytical Framework for Quantization Error Reconstruction".
+[![arXiv](https://img.shields.io/badge/arXiv-2410.06040-b31b1b.svg)](https://arxiv.org/abs/2410.06040)
+[![ic](https://img.shields.io/badge/Imperial-DeepWokLab-0D80D8)
+](https://deepwok.github.io/)
+[![license](https://img.shields.io/badge/License-Apache%202.0-D22128.svg)](/LICENSE)
 
-![cover](/docs/qera-cover.png)
+</h5>
+
+
+<h5 align="center">
+<img src="./docs/logo.png" width="200">
+</h5>
+
+This is the official implementation of the ICLR'25 paper "QERA: an Analytical Framework for Quantization Error Reconstruction".
+In this paper, we solve the following problem:
+
+Given a trained layer $\mathbf{y}=\mathbf{x}W$, QERA derives the closed-form solution to the matrix $C_k$ in $\tilde{\mathbf{y}}=\mathbf{x}(W_q + C_k)$, where $W_q$ is the approximated weight matrix (high-rank but low-precision/sparse/...) and $C_k$ is low-rank but high-precision., to minimize the expectation of the layer output error $E[\Vert \tilde{\mathbf{y}} - \mathbf{y} \Vert_2^2]$.
 
 ## Env Setup
 
@@ -44,6 +57,17 @@ In the source code and scripts, we use the following abbreviations for the low-r
 - `clm_train.py` fine-tunes the qLoRA-adapted model with low-rank terms on WikiText2.
 - `gsm8k_train.py` fine-tunes the qLoRA-adapted model with low-rank terms on GSM8K.
 
-### Experiment Scripts
+## Experiment Scripts
 
 See [`experiments/ptq`](/experiments/ptq/) and [`experiments/qpeft`](/experiments/qpeft/) for PTQ and qLoRA fine-tuning experiments, respectively.
+
+## Citation
+
+```bibtex
+@article{zhang2024qera,
+  title={QERA: an Analytical Framework for Quantization Error Reconstruction},
+  author={Zhang, Cheng and Wong, Jeffrey TH and Xiao, Can and Constantinides, George A and Zhao, Yiren},
+  journal={arXiv preprint arXiv:2410.06040},
+  year={2024}
+}
+```
