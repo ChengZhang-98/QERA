@@ -4,6 +4,8 @@
 
 🍍 This is the official implementation of the ICLR'25 paper "QERA: an Analytical Framework for Quantization Error Reconstruction".
 
+![cover](/docs/qera-cover.png)
+
 ## Env Setup
 
 ```bash
@@ -17,6 +19,15 @@ pip install -e .
 ```
 
 ## Entry Points
+
+In the source code and scripts, we use the following abbreviations for the low-rank term types:
+- If `--disable-qera` is set, no low-rank terms are used, i.e., weight-only quantization.
+- Else:
+    - `identity`: Truncated SVD on the quantized weight matrix, i.e., [ZeroQuant-V2](https://arxiv.org/abs/2303.08302)
+    - `lqer`: The heuristic method proposed in [LQER paper](https://arxiv.org/abs/2402.02446)
+    - `diag`: QERA-approx in our paper.
+    - `exact`: QERA-exact in our paper.
+
 
 ### Post-Training Quantization
 
