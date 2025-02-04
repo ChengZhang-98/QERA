@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-from loqer_exp.styles import set_default_style, get_cz_color, plot_palette, get_color
+from qera_exp.styles import set_default_style, get_cz_color, plot_palette, get_color
 
 plot_palette("cbf")
 
@@ -87,8 +87,8 @@ def visualize_roberta_logits_error(df):
         linewidth=linewidth,
     )
 
-    # 4-bit, loqer
-    mask = (df["bits"] == 4) & (df["adapter_init"] == "loqer")
+    # 4-bit, qera
+    mask = (df["bits"] == 4) & (df["adapter_init"] == "qera")
     plt.plot(
         np.arange(len(df.loc[mask, "rank"])),
         df.loc[mask, "output_error"],
@@ -160,20 +160,36 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         & (df["bits"] == 3)
         & (df["quant_type"] == "mxint")
     )
-    mask_loqer_r4 = (
-        (df["adapter_init"] == "loqer") & (df["rank"] == 4) & (df["bits"] == 3) & (df["quant_type"] == "mxint")
+    mask_qera_r4 = (
+        (df["adapter_init"] == "qera")
+        & (df["rank"] == 4)
+        & (df["bits"] == 3)
+        & (df["quant_type"] == "mxint")
     )
-    mask_loqer_r8 = (
-        (df["adapter_init"] == "loqer") & (df["rank"] == 8) & (df["bits"] == 3) & (df["quant_type"] == "mxint")
+    mask_qera_r8 = (
+        (df["adapter_init"] == "qera")
+        & (df["rank"] == 8)
+        & (df["bits"] == 3)
+        & (df["quant_type"] == "mxint")
     )
-    mask_loqer_r16 = (
-        (df["adapter_init"] == "loqer") & (df["rank"] == 16) & (df["bits"] == 3) & (df["quant_type"] == "mxint")
+    mask_qera_r16 = (
+        (df["adapter_init"] == "qera")
+        & (df["rank"] == 16)
+        & (df["bits"] == 3)
+        & (df["quant_type"] == "mxint")
     )
-    mask_qlora = (df["adapter_init"] == "qlora") & (df["rank"] == 8) & (df["bits"] == 3) & (df["quant_type"] == "mxint")
+    mask_qlora = (
+        (df["adapter_init"] == "qlora")
+        & (df["rank"] == 8)
+        & (df["bits"] == 3)
+        & (df["quant_type"] == "mxint")
+    )
 
     # output error vs loftq num iters
     qlora_error = df.loc[mask_qlora, "output_error"].values[0]
-    plt.axhline(qlora_error, color=get_cz_color("cz_grey"), linestyle="-.", label="QLoRA")
+    plt.axhline(
+        qlora_error, color=get_cz_color("cz_grey"), linestyle="-.", label="QLoRA"
+    )
 
     num_iters = np.arange(len(df.loc[mask_loftq_r8, :])) + 1
     plt.plot(
@@ -204,12 +220,24 @@ def visualize_roberta_loftq_output_errors_3bit(df):
         linewidth=linewidth,
     )
 
-    loqer_error_r4 = df.loc[mask_loqer_r4, "output_error"].values[0]
-    plt.axhline(loqer_error_r4, color=get_color("cbf_darkgreen"), linestyle="--", label="QERA (k=4)")
-    loqer_error_r8 = df.loc[mask_loqer_r8, "output_error"].values[0]
-    plt.axhline(loqer_error_r8, color=get_color("cbf_green"), linestyle=":", label="QERA (k=8)")
-    loqer_error_r16 = df.loc[mask_loqer_r16, "output_error"].values[0]
-    plt.axhline(loqer_error_r16, color=get_color("cbf_lightgreen"), linestyle="-", label="QERA (k=16)")
+    qera_error_r4 = df.loc[mask_qera_r4, "output_error"].values[0]
+    plt.axhline(
+        qera_error_r4,
+        color=get_color("cbf_darkgreen"),
+        linestyle="--",
+        label="QERA (k=4)",
+    )
+    qera_error_r8 = df.loc[mask_qera_r8, "output_error"].values[0]
+    plt.axhline(
+        qera_error_r8, color=get_color("cbf_green"), linestyle=":", label="QERA (k=8)"
+    )
+    qera_error_r16 = df.loc[mask_qera_r16, "output_error"].values[0]
+    plt.axhline(
+        qera_error_r16,
+        color=get_color("cbf_lightgreen"),
+        linestyle="-",
+        label="QERA (k=16)",
+    )
 
     ax.set_ylabel(r"Model output error")
     ax.set_xlabel(r"LoftQ num iterations")

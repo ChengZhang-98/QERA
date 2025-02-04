@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from safetensors.torch import load_file
 
-from loqer_exp.styles import set_default_style, plot_palette
+from qera_exp.styles import set_default_style, plot_palette
 
 # %%
 set_default_style()
@@ -34,7 +34,16 @@ plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
 def plot_corrcoef(coef: np.array, ax, first_n_dims=64, cbar=True):
     # plot a histogram of the first_n_dims x first_n_dims elements of coef
     coef = coef[:first_n_dims, :first_n_dims]
-    sns.heatmap(coef, ax=ax, vmin=-1, vmax=1, center=0, cbar=cbar, square=True, cbar_kws={"format": "%.2f"})
+    sns.heatmap(
+        coef,
+        ax=ax,
+        vmin=-1,
+        vmax=1,
+        center=0,
+        cbar=cbar,
+        square=True,
+        cbar_kws={"format": "%.2f"},
+    )
     # hide the x and y ticks
     ax.set_xticks([])
     ax.set_yticks([])
@@ -45,7 +54,11 @@ def plot_model_corrcoef(model_coef_dict, first_n_dims=64):
     num_cols = 4
     num_rows = (num_heatmaps + num_cols - 1) // num_cols
 
-    fig, axes = plt.subplots(num_rows, num_cols, figsize=(1.5 * linewidth, 1.5 * linewidth * num_rows / num_cols))
+    fig, axes = plt.subplots(
+        num_rows,
+        num_cols,
+        figsize=(1.5 * linewidth, 1.5 * linewidth * num_rows / num_cols),
+    )
 
     for i, (label, coef) in enumerate(model_coef_dict.items()):
         row = i // num_cols
@@ -78,16 +91,27 @@ tinyllama_coef_path = "corrcoef_TinyLlama_v1.1_20240902-112933.safetensors"
 tinyllama_coef_dict = load_file(tinyllama_coef_path)
 # sort the dictionary by the layer number
 tinyllama_coef_dict = dict(
-    sorted(tinyllama_coef_dict.items(), key=lambda x: int(re.search(r"model\.layers\.(\d+)", x[0]).group(1)))
+    sorted(
+        tinyllama_coef_dict.items(),
+        key=lambda x: int(re.search(r"model\.layers\.(\d+)", x[0]).group(1)),
+    )
 )
 # key
-tinyllama_coef_dict_k_proj = {k: v for k, v in tinyllama_coef_dict.items() if "k_proj" in k}
+tinyllama_coef_dict_k_proj = {
+    k: v for k, v in tinyllama_coef_dict.items() if "k_proj" in k
+}
 # o_proj
-tinyllama_coef_dict_o_proj = {k: v for k, v in tinyllama_coef_dict.items() if "o_proj" in k}
+tinyllama_coef_dict_o_proj = {
+    k: v for k, v in tinyllama_coef_dict.items() if "o_proj" in k
+}
 # down_proj
-tinyllama_coef_dict_down_proj = {k: v for k, v in tinyllama_coef_dict.items() if "down_proj" in k}
+tinyllama_coef_dict_down_proj = {
+    k: v for k, v in tinyllama_coef_dict.items() if "down_proj" in k
+}
 # gate_proj
-tinyllama_coef_dict_gate_proj = {k: v for k, v in tinyllama_coef_dict.items() if "gate_proj" in k}
+tinyllama_coef_dict_gate_proj = {
+    k: v for k, v in tinyllama_coef_dict.items() if "gate_proj" in k
+}
 
 fig_tinyllama = plot_model_corrcoef(tinyllama_coef_dict_k_proj, first_n_dims=64)
 fig_tinyllama.savefig("tinyllama_coef_proj.pdf", bbox_inches="tight")
@@ -106,17 +130,28 @@ llama_3_8b_coef_path = "corrcoef_meta-llama_Meta-Llama-3-8B_20240902-114311.safe
 llama_3_8b_coef_dict = load_file(llama_3_8b_coef_path)
 # sort the dictionary by the layer number
 llama_3_8b_coef_dict = dict(
-    sorted(llama_3_8b_coef_dict.items(), key=lambda x: int(re.search(r"model\.layers\.(\d+)", x[0]).group(1)))
+    sorted(
+        llama_3_8b_coef_dict.items(),
+        key=lambda x: int(re.search(r"model\.layers\.(\d+)", x[0]).group(1)),
+    )
 )
 
 # key
-llama_3_8b_coef_dict_k_proj = {k: v for k, v in llama_3_8b_coef_dict.items() if "k_proj" in k}
+llama_3_8b_coef_dict_k_proj = {
+    k: v for k, v in llama_3_8b_coef_dict.items() if "k_proj" in k
+}
 # o_proj
-llama_3_8b_coef_dict_o_proj = {k: v for k, v in llama_3_8b_coef_dict.items() if "o_proj" in k}
+llama_3_8b_coef_dict_o_proj = {
+    k: v for k, v in llama_3_8b_coef_dict.items() if "o_proj" in k
+}
 # down_proj
-llama_3_8b_coef_dict_down_proj = {k: v for k, v in llama_3_8b_coef_dict.items() if "down_proj" in k}
+llama_3_8b_coef_dict_down_proj = {
+    k: v for k, v in llama_3_8b_coef_dict.items() if "down_proj" in k
+}
 # gate_proj
-llama_3_8b_coef_dict_gate_proj = {k: v for k, v in llama_3_8b_coef_dict.items() if "gate_proj" in k}
+llama_3_8b_coef_dict_gate_proj = {
+    k: v for k, v in llama_3_8b_coef_dict.items() if "gate_proj" in k
+}
 
 fig_llama_3_8b = plot_model_corrcoef(llama_3_8b_coef_dict_k_proj, first_n_dims=64)
 fig_llama_3_8b.savefig("llama_3_8b_coef_k_proj.pdf", bbox_inches="tight")
@@ -132,19 +167,36 @@ fig_llama_3_8b.savefig("llama_3_8b_coef_gate_proj.pdf", bbox_inches="tight")
 
 # %%
 fig, ax = plt.subplots(figsize=figsize)
-plot_corrcoef(llama_3_8b_coef_dict["model.layers.0.self_attn.k_proj"], ax, first_n_dims=64, cbar=False)
+plot_corrcoef(
+    llama_3_8b_coef_dict["model.layers.0.self_attn.k_proj"],
+    ax,
+    first_n_dims=64,
+    cbar=False,
+)
 fig.savefig("llama_3_8b_coef_layer_0_k_proj.pdf", bbox_inches="tight")
 
 fig, ax = plt.subplots(figsize=figsize)
-plot_corrcoef(llama_3_8b_coef_dict["model.layers.3.self_attn.k_proj"], ax, first_n_dims=64, cbar=False)
+plot_corrcoef(
+    llama_3_8b_coef_dict["model.layers.3.self_attn.k_proj"],
+    ax,
+    first_n_dims=64,
+    cbar=False,
+)
 fig.savefig("llama_3_8b_coef_layer_3_k_proj.pdf", bbox_inches="tight")
 
 fig, ax = plt.subplots(figsize=figsize)
-plot_corrcoef(llama_3_8b_coef_dict["model.layers.3.self_attn.o_proj"], ax, first_n_dims=64, cbar=False)
+plot_corrcoef(
+    llama_3_8b_coef_dict["model.layers.3.self_attn.o_proj"],
+    ax,
+    first_n_dims=64,
+    cbar=False,
+)
 fig.savefig("llama_3_8b_coef_layer_3_o_proj.pdf", bbox_inches="tight")
 
 fig, ax = plt.subplots(figsize=figsize)
-plot_corrcoef(llama_3_8b_coef_dict["model.layers.3.mlp.down_proj"], ax, first_n_dims=64, cbar=True)
+plot_corrcoef(
+    llama_3_8b_coef_dict["model.layers.3.mlp.down_proj"], ax, first_n_dims=64, cbar=True
+)
 fig.savefig("llama_3_8b_coef_layer_3_down_proj.pdf", bbox_inches="tight")
 
 # %%

@@ -6,7 +6,7 @@ sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
 import numpy as np
 import matplotlib.pyplot as plt
 
-from loqer_exp.styles import set_default_style, plot_palette, get_cbf_color
+from qera_exp.styles import set_default_style, plot_palette, get_cbf_color
 
 plot_palette("cbf")
 
@@ -51,12 +51,37 @@ plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
 BAR_WIDTH = 1
 # num_params = [1100048384, 3204165888, 6738415616, 13015864320]
 num_params = [1.1, 2.6, 6.74, 13]
-diag_calibration_times = [122.07024502754211, 238.45239925384521, 495.30890417099, 885.988844871521]
+diag_calibration_times = [
+    122.07024502754211,
+    238.45239925384521,
+    495.30890417099,
+    885.988844871521,
+]
 diag_sqrtm_times = [0, 0, 0, 0]
-diag_svd_times = [114.09523868560791, 287.5154161453247, 1197.926025390625, 2453.2716178894043]
-rxx_calibration_times = [652.5609645843506, 1458.0771751403809, 3159.7539417743683, 7190.371248722076]
-rxx_sqrtm_times = [1602.4746532440186, 5858.455852985382, 12786.540725708008, 40417.62162208557]
-rxx_svd_times = [82.32134294509888, 239.7993712425232, 943.7165603637695, 2182.253122329712]
+diag_svd_times = [
+    114.09523868560791,
+    287.5154161453247,
+    1197.926025390625,
+    2453.2716178894043,
+]
+rxx_calibration_times = [
+    652.5609645843506,
+    1458.0771751403809,
+    3159.7539417743683,
+    7190.371248722076,
+]
+rxx_sqrtm_times = [
+    1602.4746532440186,
+    5858.455852985382,
+    12786.540725708008,
+    40417.62162208557,
+]
+rxx_svd_times = [
+    82.32134294509888,
+    239.7993712425232,
+    943.7165603637695,
+    2182.253122329712,
+]
 
 # omit 2.6B
 num_params = [1.1, 6.74, 13]

@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yaml
 
-from loqer_exp.styles import set_default_style, plot_palette
+from qera_exp.styles import set_default_style, plot_palette
 
 plot_palette("cbf")
 
@@ -19,8 +19,8 @@ with open("./roberta_weight_approx_error_3bit.yaml", "r") as f:
 loftq_layer_to_errors_raw: dict[str, list[float]] = approx_error[
     "Cheng98_roberta-base_rank_16_bit_3_adapter_loftq_loftq-5-iter"
 ]
-loqer_layer_to_error_raw: dict[str, list[float]] = approx_error[
-    "Cheng98_roberta-base_rank_16_bit_3_adapter_loqer_loftq-0-iter"
+qera_layer_to_error_raw: dict[str, list[float]] = approx_error[
+    "Cheng98_roberta-base_rank_16_bit_3_adapter_qera_loftq-0-iter"
 ]
 
 layer_name_patterns = [
@@ -38,25 +38,29 @@ def extract_layer_num(layer_name: str) -> int:
 
 
 loftq_errors_dict = {}
-loqer_error_dict = {}
+qera_error_dict = {}
 
 for layer_name in loftq_layer_to_errors_raw:
     for layer_name_p in layer_name_patterns:
         if layer_name_p in layer_name:
             if layer_name_p not in loftq_errors_dict:
                 loftq_errors_dict[layer_name_p] = {}
-                loqer_error_dict[layer_name_p] = {}
+                qera_error_dict[layer_name_p] = {}
 
             layer_number = extract_layer_num(layer_name)
-            loftq_errors_dict[layer_name_p][layer_number] = loftq_layer_to_errors_raw[layer_name]
-            loqer_error_dict[layer_name_p][layer_number] = loqer_layer_to_error_raw[
+            loftq_errors_dict[layer_name_p][layer_number] = loftq_layer_to_errors_raw[
+                layer_name
+            ]
+            qera_error_dict[layer_name_p][layer_number] = qera_layer_to_error_raw[
                 layer_name.removeprefix("base_model.model.")
             ]
             break
 
     # sort by layer number
-    loftq_errors_dict[layer_name_p] = dict(sorted(loftq_errors_dict[layer_name_p].items()))
-    loqer_error_dict[layer_name_p] = dict(sorted(loqer_error_dict[layer_name_p].items()))
+    loftq_errors_dict[layer_name_p] = dict(
+        sorted(loftq_errors_dict[layer_name_p].items())
+    )
+    qera_error_dict[layer_name_p] = dict(sorted(qera_error_dict[layer_name_p].items()))
 
 
 # %%
@@ -80,17 +84,24 @@ plt.rc("figure", titlesize=FONT_SIZE_L)  # fontsize of the figure title
 plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
 
 
-def plot_error_vs_num_iters(loftq_errors_list: list[list[float]], loftq_labels: list[str], ax, color_map):
+def plot_error_vs_num_iters(
+    loftq_errors_list: list[list[float]], loftq_labels: list[str], ax, color_map
+):
 
     assert len(loftq_errors_list) == len(loftq_labels)
-    assert all(len(loftq_errors) == len(loftq_errors_list[0]) for loftq_errors in loftq_errors_list)
+    assert all(
+        len(loftq_errors) == len(loftq_errors_list[0])
+        for loftq_errors in loftq_errors_list
+    )
 
     num_iters = len(loftq_errors_list[0])
-    x = list(range(1, num_iters+1))
+    x = list(range(1, num_iters + 1))
 
     colors = color_map(np.linspace(0.1, 0.9, len(loftq_errors_list)))
 
-    for i, (loftq_errors, label, color) in enumerate(zip(loftq_errors_list, loftq_labels, colors)):
+    for i, (loftq_errors, label, color) in enumerate(
+        zip(loftq_errors_list, loftq_labels, colors)
+    ):
         ax.plot(x, loftq_errors, "^-", markersize=markersize, color=color, label=label)
 
     ax.set_xlabel(r"LoftQ num iterations")

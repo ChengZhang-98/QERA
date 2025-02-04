@@ -19,11 +19,11 @@ import matplotlib.pyplot as plt
 import transformers
 from accelerate import dispatch_model, infer_auto_device_map
 from torch.utils.data import DataLoader
-from loqer.datasets import get_data_module
-from loqer.evaluate import evaluate_perplexity
-from loqer.utils import create_device_map, get_layer_by_name
+from qera.datasets import get_data_module
+from qera.evaluate import evaluate_perplexity
+from qera.utils import create_device_map, get_layer_by_name
 
-logger = logging.getLogger("loqer." + __name__)
+logger = logging.getLogger("qera." + __name__)
 
 
 def sqrtm_scipy(A: np.ndarray, blocksize):
@@ -46,7 +46,9 @@ def is_pos_def(x):
 def create_my_device_map(model, num_hidden_layers):
     num_devices = torch.cuda.device_count()
     max_memory = {i: torch.cuda.mem_get_info(i)[0] // 5 for i in range(num_devices)}
-    device_map = infer_auto_device_map(model, no_split_module_classes=model._no_split_modules, max_memory=max_memory)
+    device_map = infer_auto_device_map(
+        model, no_split_module_classes=model._no_split_modules, max_memory=max_memory
+    )
     n_decoder_layers = num_hidden_layers
     n_layers_per_device = math.floor(1 + n_decoder_layers / num_devices)
     if n_layers_per_device == 0:
@@ -104,7 +106,9 @@ class ScaleHookFactoryRxx:
                 self.compute_devices[name] = x.device
                 if self.compute_devices[name].type == "cpu":
                     logger.warning("Using CPU for computing Rxx, this may be slow")
-                self.scales[name] = torch.zeros(in_features, in_features, dtype=self.rxx_dtype)
+                self.scales[name] = torch.zeros(
+                    in_features, in_features, dtype=self.rxx_dtype
+                )
                 self.sizes[name] = (in_features, in_features)
 
             compute_device = self.compute_devices[name]
@@ -127,8 +131,12 @@ class ScaleHookFactoryRxx:
         num_processes = max(1, num_cores // 64)
 
         with multiprocessing.Pool(num_processes) as pool:
-            with tqdm(total=len(self.scales), desc="Computing scale", disable=not progress_bar) as pbar:
-                for name, scale_and_err in zip(self.scales.keys(), pool.imap(sqrtm_scipy, self.scales.values())):
+            with tqdm(
+                total=len(self.scales), desc="Computing scale", disable=not progress_bar
+            ) as pbar:
+                for name, scale_and_err in zip(
+                    self.scales.keys(), pool.imap(sqrtm_scipy, self.scales.values())
+                ):
                     scale = scale_and_err["A_sqrt"]
                     errest = scale_and_err["errest"]
                     self.scales[name] = scale
@@ -139,7 +147,11 @@ class ScaleHookFactoryRxx:
         for name in self.scales:
             scale = self.scales[name]
             n_samples = self.n_samples[name]
-            scale = torch.from_numpy(scale).to(self.scale_dtype).to(self.compute_devices[name])
+            scale = (
+                torch.from_numpy(scale)
+                .to(self.scale_dtype)
+                .to(self.compute_devices[name])
+            )
             scale = scale * (1 / math.sqrt(n_samples))
             self.scales[name] = scale
 
@@ -151,7 +163,9 @@ class ScaleHookFactoryRxx:
         self.handles = []
 
 
-def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str], batch_size: int):
+def sqrtm_estimated_error_vs_hidden_size(
+    model_name, layers_to_profile: list[str], batch_size: int
+):
     from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
     model_dtype = torch.float32
@@ -165,7 +179,9 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
     )
     assert isinstance(model, LlamaForCausalLM)
     model.eval()
-    max_layer_idx = max([int(re.search(r"\d+", layer_name).group()) for layer_name in layers_to_profile])
+    max_layer_idx = max(
+        [int(re.search(r"\d+", layer_name).group()) for layer_name in layers_to_profile]
+    )
     # remove the layers after the last layer to profile
     model.model.layers = model.model.layers[: max_layer_idx + 1]
     print(f"Removed layers after {max_layer_idx}. Pruned model: \n", model.model.layers)
@@ -176,7 +192,9 @@ def sqrtm_estimated_error_vs_hidden_size(model_name, layers_to_profile: list[str
     model = dispatch_model(model, device_map)
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    data_collator = transformers.DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    data_collator = transformers.DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm=False
+    )
 
     for layer_name in layers_to_profile:
         try:
@@ -264,7 +282,9 @@ if __name__ == "__main__":
     layers_to_profile = args.layers_to_profile
     batch_size = args.batch_size
     timestamp = datetime.datetime.now().strftime("%Y%-m-%d_%H-%M-%S")
-    yaml_path = Path(__file__).parent.joinpath(f"sqrtm_error_vs_rxx_size_{timestamp}.yaml")
+    yaml_path = Path(__file__).parent.joinpath(
+        f"sqrtm_error_vs_rxx_size_{timestamp}.yaml"
+    )
     results = []
 
     for model_name in model_names:

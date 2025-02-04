@@ -6,7 +6,7 @@ sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from loqer_exp.styles import set_default_style, plot_palette, get_color
+from qera_exp.styles import set_default_style, plot_palette, get_color
 
 
 def visualize_sqrtm_error_vs_rxx_size():
@@ -22,7 +22,12 @@ def visualize_sqrtm_error_vs_rxx_size():
         ["Llama-2-13B", "model.layers.1.mlp.down_proj", 13824, 2.531538386945739e-23],
         ["Llama-2-70B", "model.layers.1.mlp.down_proj", 28672, 1.302859656789357e-22],
         # 4
-        ["TinyLlama-1.1B", "model.layers.4.mlp.down_proj", 5632, 2.5193668002226372e-23],
+        [
+            "TinyLlama-1.1B",
+            "model.layers.4.mlp.down_proj",
+            5632,
+            2.5193668002226372e-23,
+        ],
         ["Llama-2-7B", "model.layers.4.mlp.down_proj", 11008, 3.3046589408859624e-22],
         ["Llama-2-13B", "model.layers.4.mlp.down_proj", 13824, 9.7150767403211e-22],
         ["Llama-2-70B", "model.layers.4.mlp.down_proj", 28672, 1.1931670913721443e-21],
@@ -32,17 +37,32 @@ def visualize_sqrtm_error_vs_rxx_size():
         ["Llama-2-13B", "model.layers.8.mlp.down_proj", 13824, 2.5927970350730244e-21],
         ["Llama-2-70B", "model.layers.8.mlp.down_proj", 28672, 1.278229530646947e-19],
         # 12
-        ["TinyLlama-1.1B", "model.layers.12.mlp.down_proj", 5632, 3.453325158646362e-22],
+        [
+            "TinyLlama-1.1B",
+            "model.layers.12.mlp.down_proj",
+            5632,
+            3.453325158646362e-22,
+        ],
         ["Llama-2-7B", "model.layers.12.mlp.down_proj", 11008, 2.8546715776898906e-21],
         ["Llama-2-13B", "model.layers.12.mlp.down_proj", 13824, 5.291081534353017e-21],
         ["Llama-2-70B", "model.layers.12.mlp.down_proj", 28672, 4.397710435251772e-22],
         # 16
-        ["TinyLlama-1.1B", "model.layers.16.mlp.down_proj", 5632, 1.3587203942714328e-21],
+        [
+            "TinyLlama-1.1B",
+            "model.layers.16.mlp.down_proj",
+            5632,
+            1.3587203942714328e-21,
+        ],
         ["Llama-2-7B", "model.layers.16.mlp.down_proj", 11008, 5.940289246362384e-21],
         ["Llama-2-13B", "model.layers.16.mlp.down_proj", 13824, 7.309526409850914e-21],
         ["Llama-2-70B", "model.layers.16.mlp.down_proj", 28672, 1.030444324421089e-20],
         # 20
-        ["TinyLlama-1.1B", "model.layers.20.mlp.down_proj", 5632, 1.5188557563370398e-21],
+        [
+            "TinyLlama-1.1B",
+            "model.layers.20.mlp.down_proj",
+            5632,
+            1.5188557563370398e-21,
+        ],
         ["Llama-2-7B", "model.layers.20.mlp.down_proj", 11008, 1.1183485469540252e-20],
         ["Llama-2-13B", "model.layers.20.mlp.down_proj", 13824, 1.108525197693666e-20],
         ["Llama-2-70B", "model.layers.20.mlp.down_proj", 28672, 1.6725920123638545e-20],
@@ -126,7 +146,9 @@ def visualize_sqrtm_error_vs_rxx_size():
         color=get_color("cbf_orange"),
         label="layer 20",
     )
-    ax.set_ylabel(r"$R_{xx}$ error ratio $\log (\frac{\| R_{xx}\ Error \|_F}{\| R_{xx} \|_F})$")
+    ax.set_ylabel(
+        r"$R_{xx}$ error ratio $\log (\frac{\| R_{xx}\ Error \|_F}{\| R_{xx} \|_F})$"
+    )
     ax.set_xlabel(r"Layer hidden size")
     ax.set_xticks(df["rxx_size"].unique())
     ax.set_xticklabels(["1.1B", "7B", "13B", "70B"])

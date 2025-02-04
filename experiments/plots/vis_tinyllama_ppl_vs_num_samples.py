@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.append(Path(__file__).resolve().parents[2].joinpath("src").as_posix())
 import matplotlib.pyplot as plt
 
-from loqer_exp.styles import set_default_style, get_color
+from qera_exp.styles import set_default_style, get_color
 
 
 # %%
@@ -31,12 +31,26 @@ plt.rcParams["legend.title_fontsize"] = FONT_SIZE_M
 ppl_identity = 13.9090
 num_samples = [4, 8, 16, 64, 256]
 ppl_lqer = [10.7185, 10.6929, 10.7392, 10.7247, 10.7833]
-ppl_loqer_diag = [10.7007, 10.6807, 10.6749, 10.6586, 10.6594]
+ppl_qera_diag = [10.7007, 10.6807, 10.6749, 10.6586, 10.6594]
 
 fig, ax = plt.subplots(figsize=figsize)
 
-ax.plot(num_samples, ppl_lqer, "s-", label="LQER", markersize=markersize, color=get_color("cbf_purple"))
-ax.plot(num_samples, ppl_loqer_diag, "o-", label="QERA-approx", markersize=markersize, color=get_color("cbf_green"))
+ax.plot(
+    num_samples,
+    ppl_lqer,
+    "s-",
+    label="LQER",
+    markersize=markersize,
+    color=get_color("cbf_purple"),
+)
+ax.plot(
+    num_samples,
+    ppl_qera_diag,
+    "o-",
+    label="QERA-approx",
+    markersize=markersize,
+    color=get_color("cbf_green"),
+)
 # ax.axhline(y=ppl_identity, color=get_cz_color("cz_lightorange"), linestyle="--", label="Identity")
 
 # log2 x-axis

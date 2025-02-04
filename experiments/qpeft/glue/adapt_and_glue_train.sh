@@ -1,7 +1,7 @@
 # envs
-workdir=~/Projects/LoQER
+workdir=../../../
 ckpt_dir=$workdir/checkpoints/glue
-env_name=loqer
+env_name=qera
 cd $workdir
 
 function check_return_value() {
@@ -86,22 +86,22 @@ lora_alpha=$((lora_rank * 2)) # alpha = 2 * rank
 # loftq
 loftq_num_iters=5
 
-# loqer
-loqer_num_calibration_samples=256
-loqer_calibration_batch_size=2
+# qera
+qera_num_calibration_samples=256
+qera_calibration_batch_size=2
 if [[ $quant_bits == 2 ]]; then
-    loqer_scaling_mode=rxx
+    qera_scaling_mode=rxx
 else
-    loqer_scaling_mode=diag
+    qera_scaling_mode=diag
 fi
-loqer_calibration_set_type=pretrain
-if [[ $loqer_calibration_set_type == "pretrain" ]]; then
-    loqer_calibration_seq_len=512
+qera_calibration_set_type=pretrain
+if [[ $qera_calibration_set_type == "pretrain" ]]; then
+    qera_calibration_seq_len=512
 else
-    loqer_calibration_seq_len=$max_seq_len
+    qera_calibration_seq_len=$max_seq_len
 fi
 
-if [[ $loqer_calibration_set_type == "downstream" ]]; then
+if [[ $qera_calibration_set_type == "downstream" ]]; then
     task_name_for_calibration=glue,${task_name}_peft
 else
     task_name_for_calibration=wikitext2_mlm
@@ -123,18 +123,18 @@ model_name_esc=$(echo $model_name | sed 's/\//-/g')
 dataset_name_esc=$(echo $task_name | sed 's/,/-/g')
 dataset_name_esc=$(echo $dataset_name_esc | sed 's/\//-/g')
 
-# lora, qlora, loftq, loqer
+# lora, qlora, loftq, qera
 if [[ $adapter_init == "qlora" ]]; then
     adapt_output_dir=${ckpt_dir}/qlora_cls/${model_name_esc}_${num_labels}-labels_rank-${lora_rank}_${quant_type}_${quant_bits}bit
 elif [[ $adapter_init == "loftq" ]]; then
     adapt_output_dir=${ckpt_dir}/loftq_cls/${model_name_esc}_${num_labels}-labels_rank-${lora_rank}_${loftq_num_iters}iter_${quant_type}_${quant_bits}bit
 elif [[ $adapter_init == "lora" ]]; then
     adapt_output_dir=${ckpt_dir}/lora_cls/${model_name_esc}_rank-${lora_rank}
-elif [[ $adapter_init == "loqer" ]]; then
-    if [[ $loqer_calibration_set_type == "downstream" ]]; then
-        adapt_output_dir=${ckpt_dir}/loqer_cls/calibrated-on-${dataset_name_esc}/${model_name_esc}_${num_labels}-labels_rank-${lora_rank}_${loqer_scaling_mode}_calibrated-on-${loqer_calibration_set_type}_${quant_type}_${quant_bits}bit
+elif [[ $adapter_init == "qera" ]]; then
+    if [[ $qera_calibration_set_type == "downstream" ]]; then
+        adapt_output_dir=${ckpt_dir}/qera_cls/calibrated-on-${dataset_name_esc}/${model_name_esc}_${num_labels}-labels_rank-${lora_rank}_${qera_scaling_mode}_calibrated-on-${qera_calibration_set_type}_${quant_type}_${quant_bits}bit
     else
-        adapt_output_dir=${ckpt_dir}/loqer_cls/calibrated-on-${task_name_for_calibration}/${model_name_esc}_${num_labels}-labels_rank-${lora_rank}_${loqer_scaling_mode}_calibrated-on-${loqer_calibration_set_type}_${quant_type}_${quant_bits}bit
+        adapt_output_dir=${ckpt_dir}/qera_cls/calibrated-on-${task_name_for_calibration}/${model_name_esc}_${num_labels}-labels_rank-${lora_rank}_${qera_scaling_mode}_calibrated-on-${qera_calibration_set_type}_${quant_type}_${quant_bits}bit
     fi
 elif [[ $adapter_init == "full-finetune" ]]; then
     adapt_output_dir=${ckpt_dir}/full-finetune/$dataset_name_esc/${model_name_esc}
@@ -155,12 +155,12 @@ if [[ $adapter_init != "full-finetune" ]]; then
     if [[ $overwrite_adapt_dir == "true" || ! -d $adapt_output_dir ]]; then
         conda run -n $env_name --no-capture-output python adapt_and_save.py \
             cls $model_name $adapter_init $adapt_output_dir \
-            --loqer-calibration-set $task_name_for_calibration \
-            --loqer-num-calibration-samples $loqer_num_calibration_samples \
-            --loqer-calibration-batch-size $loqer_calibration_batch_size \
-            --loqer-calibration-set-type $loqer_calibration_set_type \
-            --loqer-max-seq-length $loqer_calibration_seq_len \
-            --loqer-scaling-mode $loqer_scaling_mode \
+            --qera-calibration-set $task_name_for_calibration \
+            --qera-num-calibration-samples $qera_num_calibration_samples \
+            --qera-calibration-batch-size $qera_calibration_batch_size \
+            --qera-calibration-set-type $qera_calibration_set_type \
+            --qera-max-seq-length $qera_calibration_seq_len \
+            --qera-scaling-mode $qera_scaling_mode \
             --loftq-num-iters $loftq_num_iters \
             --quant-type $quant_type \
             --quant-bits $quant_bits \
@@ -202,8 +202,8 @@ for learning_rate in ${learning_rate_list[@]}; do
         tags="${dataset_name_esc} ${adapter_init} ${model_name_esc} rank-${lora_rank}"
     else
         tags="debug ${dataset_name_esc} ${adapter_init} ${model_name_esc} rank-${lora_rank} ${quant_type} ${quant_bits}-bit"
-        if [[ $adapter_init == "loqer" ]]; then
-            tags="${tags} ${loqer_scaling_mode} calibrated-on-${loqer_calibration_set_type}"
+        if [[ $adapter_init == "qera" ]]; then
+            tags="${tags} ${qera_scaling_mode} calibrated-on-${qera_calibration_set_type}"
         fi
         if [[ $quant_type == "mxint" ]]; then
             tags="${tags} mxint-block-size-${mxint_block_size}"

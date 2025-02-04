@@ -1,0 +1,6 @@
+group: qera_benchmark_hard
+task:
+  # - leaderboard_mmlu_pro # tinyllama: 7:21, this is too hard for small models
+  - leaderboard_bbh # tinyllama: 10:08
+  # - leaderboard_gpqa # tinyllama: 01:18
+  # - leaderboard_math_hard # this is generate-base, slow

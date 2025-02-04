@@ -42,11 +42,11 @@ TASK_NAMES = [
     "leaderboard_gpqa_extended",
     "leaderboard_gpqa_main",
     "leaderboard_mmlu_pro",
-    "loqer_benchmark_classic",
-    "loqer_benchmark_hard",
+    "qera_benchmark_classic",
+    "qera_benchmark_hard",
     "wikitext",
     "winogrande",
-    "mmlu"
+    "mmlu",
 ]
 
 TASKS_TO_MERGE = {
@@ -55,8 +55,8 @@ TASKS_TO_MERGE = {
 }
 
 TASKS_TO_IGNORE = [
-    "loqer_benchmark_classic",
-    "loqer_benchmark_hard",
+    "qera_benchmark_classic",
+    "qera_benchmark_hard",
     "leaderboard_bbh",
     "leaderboard_gpqa",
 ]
@@ -88,7 +88,9 @@ def main():
         def ignore_unknown(self, node):
             return None
 
-    SafeLoaderIgnoreUnknown.add_constructor(None, SafeLoaderIgnoreUnknown.ignore_unknown)
+    SafeLoaderIgnoreUnknown.add_constructor(
+        None, SafeLoaderIgnoreUnknown.ignore_unknown
+    )
 
     args = parse_args()
 
@@ -113,7 +115,9 @@ def main():
 
                 merged_results[task_name_pattern]["value"].append(results[task][metric])
                 if task in n_samples:
-                    merged_results[task_name_pattern]["count"].append(n_samples[task]["effective"])
+                    merged_results[task_name_pattern]["count"].append(
+                        n_samples[task]["effective"]
+                    )
                 else:
                     merged_results[task_name_pattern]["count"].append(1)
 
@@ -135,7 +139,12 @@ def main():
     if args.output_csv:
         if args.output_csv == "auto":
             timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-            output_csv = Path(args.lm_eval_results_yaml).absolute().as_posix().replace(".yaml", f"-{timestamp}.csv")
+            output_csv = (
+                Path(args.lm_eval_results_yaml)
+                .absolute()
+                .as_posix()
+                .replace(".yaml", f"-{timestamp}.csv")
+            )
         else:
             output_csv = args.output_csv
         df.to_csv(output_csv, index=False)

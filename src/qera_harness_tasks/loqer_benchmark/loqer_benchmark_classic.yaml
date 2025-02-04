@@ -1,0 +1,15 @@
+group: qera_benchmark_classic
+task:
+  - task: boolq
+    num_fewshot: 0
+  - task: commonsense_qa
+    num_fewshot: 7
+  - task: winogrande
+    fewshot_split: train
+    num_fewshot: 5
+  - task: arc_challenge
+    fewshot_split: validation
+    num_fewshot: 25
+  - task: mmlu
+    num_fewshot: 5
+  - task: wikitext
