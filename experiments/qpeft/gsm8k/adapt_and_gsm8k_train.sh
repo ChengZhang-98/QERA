@@ -176,7 +176,7 @@ for learning_rate in ${learning_rate_list[@]}; do
         fi
     fi
 
-    conda run -n $env_name --no-capture-output accelerate launch train_gsm8k.py \
+    conda run -n $env_name --no-capture-output accelerate launch gsm8k_train.py \
         --model_name_or_path $model_name_or_path --tokenizer_name $model_name \
         --lora_adapter_dir $lora_adapter_dir \
         --output_dir $training_ckpt_dir \

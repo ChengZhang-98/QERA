@@ -745,7 +745,7 @@ def main():
             tracker_init_kwargs["wandb"]["name"] = args.run_name
         if args.wandb_tags is not None:
             tracker_init_kwargs["wandb"]["tags"] = args.wandb_tags
-        accelerator.init_trackers("train_gsm8k", experiment_config, tracker_init_kwargs)
+        accelerator.init_trackers("gsm8k_train", experiment_config, tracker_init_kwargs)
 
     # Train!
     total_batch_size = (

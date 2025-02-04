@@ -1,42 +1,38 @@
-# QERA: Analytical Solution to Quantization Error Approximation
+# QERA: an Analytical Framework for Quantization Error Reconstruction
 
+[[paper]](https://arxiv.org/abs/2410.06040)
+
+🍍 This is the official implementation of the ICLR'25 paper "QERA: an Analytical Framework for Quantization Error Reconstruction".
 
 ## Env Setup
 
 ```bash
+git clone git@github.com:ChengZhang-98/QERA.git
+cd QERA
+git submodule update --init
 conda env create -f environment.yml
-conda run -n qera python -m pip install -r requirements.txt
+conda activate qera
+pip install -r requirements.txt
+pip install -e .
 ```
 
-## Usage
+## Entry Points
 
+### Post-Training Quantization
 
-1. MXINT4 weight quantization only, no qera
+- `ptq_bf16_baseline.py` evaluates BF16 baseline.
+- `ptq_q_baseline.py` evaluates PTQ baseline.
+- `ptq_pipeline.py` runs data calibration (if needed), computes low-rank terms, and evaluates the quantized model.
+- `ptq_pipeline_chunked.py` runs data calibration (if needed), and computes low-rank terms for a chunk of layers. This is useful for large models. If all chunks (layers) are computed, this script also triggers the evaluation of the quantized model.
+    - `chunk_checker.py` checks the completion of the chunks (optional).
 
-    ```bash
-    python ptq_pipeline.py ./experiments/configs/w-only-uniform-rank.yaml --disable-qera --disable-perplexity-eval
-    ```
+### Quantized LoRA Fine-Tuning
 
-    The config template `w-only-uniform-rank.yaml` runs TinyLlama on a subset of SlimPajama for calibration, and WikiText2 for perplexity evaluation.
+- `adapt_and_save.py` run data calibration, quantizes the model, computes the initial value of the low-rank terms, and saves the quantized model + low-rank terms.
+- `glue_train.py` fine-tunes the qLoRA-adapted model with low-rank terms on GLUE tasks.
+- `clm_train.py` fine-tunes the qLoRA-adapted model with low-rank terms on WikiText2.
+- `gsm8k_train.py` fine-tunes the qLoRA-adapted model with low-rank terms on GSM8K.
 
-2. MXINT4 weight, scale = identity matrix (ZeroQuantV2)
+### Experiment Scripts
 
-    ```bash
-    python ptq_pipeline.py ./experiments/configs/w-s-uniform-rank.yaml --qera-scaling-mode identity --disable-perplexity-eval
-    ```
-
-    "scale = idenity matrix" means that we just apply SVD to the quantization error: $\mathrm{SVD}(W - W_q)$.
-
-3. MXINT weight, scale = activation induced diagonal matrix, which is derived by assuming $E[x_i x_j] = 0$ for $i\neq j$.
-
-    ```bash
-    python ptq_pipeline.py ./experiments/configs/w-s-activation-rank.yaml --qera-scaling-mode diag --disable-perplexity-eval
-    ```
-
-4. MXINT weight, scale = auto-correlation matrix of activation vectors, which is derived without the assumption.
-
-    ```bash
-    python ptq_pipeline.py ./experiments/configs/w-s-activation-rank.yaml --qera-scaling-mode rxx --disable-perplexity-eval
-    ```
-
-
+See [`experiments/ptq`](/experiments/ptq/) and [`experiments/qpeft`](/experiments/qpeft/) for PTQ and qLoRA fine-tuning experiments, respectively.
